@@ -1,0 +1,106 @@
+// Stamiox Prisma Schema for PostgreSQL
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SubscriptionPlan {
+  FREE_TRIAL
+  MONTHLY_PRO
+  YEARLY_PRO
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum StampShape {
+  ROUND
+  RECTANGULAR
+  OVAL
+  SQUARE
+  CUSTOM
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  passwordHash  String
+  name          String
+  company       String?
+  role          String         @default("USER") // USER, ADMIN
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  
+  subscription  Subscription?
+  projects      StampProject[]
+}
+
+model Subscription {
+  id                 String             @id @default(uuid())
+  userId             String             @unique
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan               SubscriptionPlan   @default(FREE_TRIAL)
+  status             SubscriptionStatus @default(TRIALING)
+  trialStartDate     DateTime           @default(now())
+  trialEndDate       DateTime           // 90 days from registration
+  currentPeriodStart DateTime           @default(now())
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean            @default(false)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+}
+
+model StampProject {
+  id           String     @id @default(uuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title        String
+  description  String?
+  category     String     @default("custom")
+  shape        StampShape @default(ROUND)
+  widthMm      Float      @default(40.0)
+  heightMm     Float      @default(40.0)
+  inkColor     String     @default("#1e3a8a") // Stamp Navy Blue
+  elementsJson Json       // Canvas elements (ArcText, StraightText, Rings, Clipart, Images)
+  thumbnailSvg String?    @db.Text
+  isTemplate   Boolean    @default(false)
+  isPublic     Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+model StampTemplate {
+  id           String     @id @default(uuid())
+  title        String
+  description  String
+  category     String     // company, notary, medical, address, date, monogram, office
+  shape        StampShape @default(ROUND)
+  widthMm      Float      @default(40.0)
+  heightMm     Float      @default(40.0)
+  previewSvg   String     @db.Text
+  defaultData  Json       // Default layers & parameters for quick editor
+  tags         String[]   @default([])
+  isPremium    Boolean    @default(false)
+  usageCount   Int        @default(0)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+model Clipart {
+  id        String   @id @default(uuid())
+  name      String
+  category  String   // emblems, stars, legal, medical, borders, flourishes, icons
+  svgPath   String   @db.Text
+  viewBox   String   @default("0 0 100 100")
+  tags      String[] @default([])
+  createdAt DateTime @default(now())
+}
