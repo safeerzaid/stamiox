@@ -20,6 +20,7 @@ export interface BaseElement {
   visible?: boolean;
   opacity?: number;
   rotation?: number; // degrees
+  groupId?: string;
 }
 
 export interface ArcTextElement extends BaseElement {
@@ -28,6 +29,8 @@ export interface ArcTextElement extends BaseElement {
   cx: number; // center X in mm
   cy: number; // center Y in mm
   radius: number; // radius in mm
+  rx?: number; // optional elliptical X radius in mm
+  ry?: number; // optional elliptical Y radius in mm
   startAngle: number; // in degrees (-180 to 180)
   sweepAngle: number; // in degrees
   fontSize: number; // in mm
@@ -119,7 +122,8 @@ export interface ClipartElement extends BaseElement {
 
 export interface ImageElement extends BaseElement {
   type: 'image';
-  src: string; // base64 or url
+  src: string; // base64 or url (original upload)
+  maskSrc?: string; // processed 1-bit silhouette (white-on-transparent PNG) rendered in ink colour
   x: number;
   y: number;
   width: number;

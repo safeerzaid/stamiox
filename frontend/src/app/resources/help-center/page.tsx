@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
+import { SupportModal } from '../../../components/common/SupportModal';
 import {
   HelpCircle,
   ChevronRight,
@@ -17,6 +18,7 @@ import {
 
 export default function HelpCenterPage() {
   const [openFaq, setOpenFaq] = useState<number | null>(0);
+  const [isSupportModalOpen, setIsSupportModalOpen] = useState(false);
 
   const faqs = [
     {
@@ -104,9 +106,8 @@ export default function HelpCenterPage() {
                   >
                     <span className="font-bold text-sm text-slate-900">{faq.q}</span>
                     <ChevronDown
-                      className={`w-4 h-4 text-slate-500 shrink-0 transition-transform duration-200 ${
-                        isOpen ? 'rotate-180 text-blue-600' : ''
-                      }`}
+                      className={`w-4 h-4 text-slate-500 shrink-0 transition-transform duration-200 ${isOpen ? 'rotate-180 text-blue-600' : ''
+                        }`}
                     />
                   </button>
 
@@ -130,14 +131,30 @@ export default function HelpCenterPage() {
             </p>
           </div>
 
-          <a
-            href="mailto:support@stamiox.com"
-            className="px-6 py-3.5 rounded-full bg-white hover:bg-blue-50 text-blue-950 font-bold text-xs sm:text-sm shadow-[0_0_25px_rgba(59,130,246,0.35)] transition-all hover:scale-105 flex items-center gap-2 shrink-0 cursor-pointer"
-          >
-            <Mail className="w-4 h-4 text-blue-600" />
-            <span>Contact Support</span>
-          </a>
+          <div className="flex flex-col sm:flex-row items-center gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsSupportModalOpen(true)}
+              className="px-6 py-3.5 rounded-full bg-[#0d99ff] hover:bg-[#0b87e0] text-white font-bold text-xs sm:text-sm shadow-[0_0_25px_rgba(13,153,255,0.4)] transition-all hover:scale-105 flex items-center gap-2 cursor-pointer"
+            >
+              <HelpCircle className="w-4 h-4" />
+              <span>Submit Requirement / Suggestion</span>
+            </button>
+            <a
+              href="mailto:support@stamiox.com"
+              className="px-5 py-3.5 rounded-full bg-white/10 hover:bg-white/20 text-white font-bold text-xs sm:text-sm border border-white/20 transition-all flex items-center gap-2 cursor-pointer"
+            >
+              <Mail className="w-4 h-4 text-blue-300" />
+              <span>Email Support</span>
+            </a>
+          </div>
         </div>
+
+        {/* Support, Requirements & Suggestions Modal */}
+        <SupportModal
+          isOpen={isSupportModalOpen}
+          onClose={() => setIsSupportModalOpen(false)}
+        />
       </div>
     </div>
   );

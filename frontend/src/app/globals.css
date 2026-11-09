@@ -2,7 +2,26 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Alex+Brush&family=Allura&family=Anton&family=Archivo+Black&family=Barlow+Condensed:wght@600;700;800&family=Bebas+Neue&family=Bodoni+Moda:wght@600;700;800&family=Cinzel+Decorative:wght@700&family=Cinzel:wght@600;700;800;900&family=Cormorant+Garamond:wght@600;700&family=DM+Sans:wght@500;700;800&family=DM+Serif+Display&family=Dancing+Script:wght@700&family=EB+Garamond:wght@600;700;800&family=Fira+Code:wght@500;700&family=Great+Vibes&family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@500;700&family=Lora:wght@600;700&family=MedievalSharp&family=Merriweather:wght@700;900&family=Montserrat:wght@500;600;700;800;900&family=Oswald:wght@500;600;700&family=Outfit:wght@500;600;700;800&family=Pacifico&family=Pinyon+Script&family=Playfair+Display:ital,wght@0,600;0,700;0,800;1,600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Poppins:wght@500;600;700;800&family=Prata&family=Raleway:wght@600;700;800&family=Righteous&family=Russo+One&family=Sacramento&family=Share+Tech+Mono&family=Space+Grotesk:wght@500;600;700&family=Space+Mono:wght@700&family=Staatliches&family=Teko:wght@600;700&family=Work+Sans:wght@600;700;800&display=swap');
+/* =========================================================================
+   STAMIOX PROFESSIONAL STAMP TYPOGRAPHY SUITE (100+ CURATED GOOGLE FONTS)
+   ========================================================================= */
+/* 1. Modern & Clean Sans-Serif */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=Montserrat:wght@400;500;600;700;800;900&family=Poppins:wght@400;500;600;700;800&family=DM+Sans:wght@400;500;700;800&family=Work+Sans:wght@400;500;600;700;800&family=Raleway:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Sora:wght@400;500;600;700&family=Lexend:wght@400;500;600;700&family=Urbanist:wght@400;500;600;700;800&family=Figtree:wght@400;500;600;700&family=Rubik:wght@400;500;600;700&family=Nunito+Sans:wght@400;600;700;800&family=Josefin+Sans:wght@400;600;700&family=Quicksand:wght@400;500;600;700&family=Exo+2:wght@400;600;700;800&family=Cabin:wght@400;600;700&family=Barlow:wght@400;500;600;700&family=Overpass:wght@400;600;700&family=Kanit:wght@400;500;600;700&family=Archivo:wght@400;600;700&display=swap');
+
+/* 2. Official Seals, Notary & Luxury Serifs */
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800;900&family=Cinzel+Decorative:wght@700;900&family=Playfair+Display:ital,wght@0,500;0,600;0,700;0,800;1,600&family=Cormorant+Garamond:wght@500;600;700&family=EB+Garamond:wght@500;600;700;800&family=DM+Serif+Display&family=Bodoni+Moda:wght@500;600;700;800&family=Merriweather:wght@400;700;900&family=Lora:wght@500;600;700&family=Prata&family=Libre+Baskerville:wght@400;700&family=Crimson+Pro:wght@400;600;700&family=Spectral:wght@400;600;700&family=Abril+Fatface&family=Marcellus&family=Forum&family=Castoro&family=Faustina:wght@500;600;700&family=Gilda+Display&family=Yeseva+One&display=swap');
+
+/* 3. Bold Stamp, Condensed & Heavy Impact Blocks */
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Oswald:wght@500;600;700&family=Anton&family=Archivo+Black&family=Barlow+Condensed:wght@600;700;800&family=Russo+One&family=Teko:wght@500;600;700&family=Staatliches&family=Righteous&family=Black+Ops+One&family=Bungee&family=Passion+One:wght@700;900&family=Alfa+Slab+One&family=Big+Shoulders+Display:wght@700;800;900&family=Fjalla+One&family=Saira+Condensed:wght@600;700;800&family=Titan+One&family=Squada+One&family=Chango&display=swap');
+
+/* 4. Calligraphy, Cursive & Signatory Scripts */
+@import url('https://fonts.googleapis.com/css2?family=Great+Vibes&family=Dancing+Script:wght@600;700&family=Alex+Brush&family=Allura&family=Pinyon+Script&family=Sacramento&family=Pacifico&family=Parisienne&family=Satisfy&family=Kaushan+Script&family=Yellowtail&family=Tangerine:wght@700&family=Italianno&family=Herr+Von+Muellerhoff&family=Marck+Script&family=Homemade+Apple&family=Bad+Script&family=Caveat:wght@600;700&display=swap');
+
+/* 5. Technical Daters, Monospace, Vintage & Gothic Seals */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&family=Space+Mono:wght@700&family=Fira+Code:wght@500;600;700&family=Share+Tech+Mono&family=IBM+Plex+Mono:wght@500;600&family=Courier+Prime:wght@700&family=Roboto+Mono:wght@500;600;700&family=Major+Mono+Display&family=Overpass+Mono:wght@600;700&family=Anonymous+Pro:wght@700&family=MedievalSharp&family=UnifrakturMaguntia&family=Pirata+One&family=Uncial+Antiqua&family=IM+Fell+English+SC&family=Special+Elite&family=Rye&family=Sancreek&family=Trade+Winds&family=Caesar+Dressing&display=swap');
+
+/* 6. Indian Regional Language Scripts (Malayalam, Hindi, Tamil) */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Malayalam:wght@500;600;700&family=Manjari:wght@700&family=Gayathri:wght@700&family=Chilanka&family=Baloo+Chettan+2:wght@600;700;800&family=Noto+Sans+Devanagari:wght@500;600;700&family=Hind:wght@500;600;700&family=Mukta:wght@500;600;700&family=Rozha+One&family=Noto+Sans+Tamil:wght@500;600;700&display=swap');
 
 :root {
   --foreground-rgb: 15, 23, 42;
@@ -22,6 +41,15 @@ html, body {
   text-rendering: optimizeLegibility;
 }
 
+html.dark {
+  color-scheme: dark;
+}
+
+html.dark, html.dark body {
+  color: #f1f5f9;
+  background-color: #0b0f19;
+}
+
 h1, h2, h3, h4, h5, h6, .font-heading {
   font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
   letter-spacing: -0.03em;
@@ -29,10 +57,18 @@ h1, h2, h3, h4, h5, h6, .font-heading {
   color: #111827;
 }
 
+html.dark h1, html.dark h2, html.dark h3, html.dark h4, html.dark h5, html.dark h6, html.dark .font-heading {
+  color: #f8fafc;
+}
+
 p {
   color: #5f6368;
   line-height: 1.625;
   font-weight: 400;
+}
+
+html.dark p {
+  color: #94a3b8;
 }
 
 button, input, select, textarea {
@@ -179,8 +215,8 @@ button, input, select, textarea {
 }
 
 .animate-dropdown-item {
-  opacity: 0;
-  animation: fadeInStagger 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  /* backwards fill: hidden during its delay, then hands transform back to hover effects */
+  animation: fadeInStagger 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
 /* Stamp Canvas Live Typing Blinking Caret */
@@ -477,4 +513,328 @@ button, input, select, textarea {
   80% {
     filter: hue-rotate(-45deg);
   }
+}
+
+/* ───────────────── Advanced dropdown & click animation system ─────────────────
+   .fx-menu  → dropdown panel: ultra-smooth, slow pop-in with items cascading in
+   .fx-item  → menu item: cursor-following glow, growing accent bar,
+               gentle slide, soft gradient, slow & smooth press feedback
+   .click-pulse → tactile ring ripple when clicked
+   .btn-smooth  → smooth slow scale down on active, graceful rebound on release   */
+@keyframes fxMenuIn {
+  0% {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.97);
+    filter: blur(3px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+@keyframes fxItemIn {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes smoothClickRing {
+  0% {
+    box-shadow: 0 0 0 0 rgba(13, 153, 255, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 0 10px rgba(13, 153, 255, 0);
+  }
+}
+
+/* ─── Bottom Bar Slow & Smooth Click Animation Suite ─── */
+@keyframes toolClickRipple {
+  0% {
+    transform: scale(0.65);
+    opacity: 0.85;
+    background: radial-gradient(circle, rgba(13, 153, 255, 0.35) 0%, rgba(13, 153, 255, 0.1) 65%, transparent 100%);
+    box-shadow: 0 0 0 0 rgba(13, 153, 255, 0.45);
+  }
+  45% {
+    opacity: 0.55;
+    transform: scale(1.08);
+    box-shadow: 0 0 0 8px rgba(13, 153, 255, 0.22);
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+    box-shadow: 0 0 0 18px rgba(13, 153, 255, 0);
+  }
+}
+
+.animate-tool-click-ripple {
+  animation: toolClickRipple 0.72s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes iconClickFlex {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.22) rotate(-5deg);
+  }
+  70% {
+    transform: scale(0.96) rotate(2deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+.animate-icon-flex {
+  animation: iconClickFlex 0.65s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes btnSlowDip {
+  0% {
+    transform: scale(1);
+  }
+  30% {
+    transform: scale(0.92);
+  }
+  65% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-btn-slow-dip {
+  animation: btnSlowDip 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.click-pulse {
+  user-select: none;
+}
+.click-pulse:active {
+  animation: smoothClickRing 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.btn-smooth {
+  user-select: none;
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 0.25s ease,
+              color 0.2s ease,
+              box-shadow 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.25s ease;
+}
+.btn-smooth:hover {
+  transform: scale(1.03);
+}
+.btn-smooth:active {
+  transform: scale(0.92);
+  transition-duration: 0.12s;
+  animation: smoothClickRing 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.fx-menu {
+  transform-origin: top center;
+  animation: fxMenuIn 0.52s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.fx-menu .fx-item {
+  animation: fxItemIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.fx-menu .fx-item:nth-child(1) { animation-delay: 0.05s; }
+.fx-menu .fx-item:nth-child(2) { animation-delay: 0.09s; }
+.fx-menu .fx-item:nth-child(3) { animation-delay: 0.13s; }
+.fx-menu .fx-item:nth-child(4) { animation-delay: 0.17s; }
+.fx-menu .fx-item:nth-child(5) { animation-delay: 0.21s; }
+.fx-menu .fx-item:nth-child(6) { animation-delay: 0.25s; }
+.fx-menu .fx-item:nth-child(n + 7) { animation-delay: 0.29s; }
+
+.fx-item {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1),
+              color 0.2s ease,
+              box-shadow 0.32s cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 0.2s ease;
+}
+/* cursor-following glow */
+.fx-item::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background:
+    radial-gradient(120px circle at var(--mx, 50%) var(--my, 50%), rgba(13, 153, 255, 0.16), transparent 65%),
+    linear-gradient(90deg, rgba(13, 153, 255, 0.07), rgba(13, 153, 255, 0.015));
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+/* accent bar that grows from the center */
+.fx-item::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  width: 3px;
+  height: 0;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #38bdf8, #0d99ff);
+  transform: translateY(-50%);
+  transition: height 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+}
+.fx-item:hover,
+.fx-item:focus-visible {
+  transform: translateX(3px) scale(1.01);
+  box-shadow: 0 6px 16px -10px rgba(13, 153, 255, 0.45);
+}
+.fx-item:hover::after,
+.fx-item:focus-visible::after { opacity: 1; }
+.fx-item:hover::before,
+.fx-item:focus-visible::before { height: 58%; }
+.fx-item:active {
+  transform: translateX(3px) scale(0.95);
+  transition-duration: 0.12s;
+}
+.fx-item:focus-visible { outline: 2px solid rgba(13, 153, 255, 0.45); outline-offset: 1px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-menu, .fx-menu .fx-item { animation: none; }
+  .fx-item, .fx-item::before, .fx-item::after { transition: none; }
+  .fx-item:hover, .fx-item:focus-visible, .fx-item:active { transform: none; }
+}
+/* destructive menu items (e.g. Log out) use a rose glow instead of blue */
+.fx-item.fx-danger::after {
+  background:
+    radial-gradient(120px circle at var(--mx, 50%) var(--my, 50%), rgba(244, 63, 94, 0.16), transparent 65%),
+    linear-gradient(90deg, rgba(244, 63, 94, 0.07), rgba(244, 63, 94, 0.015));
+}
+.fx-item.fx-danger::before { background: linear-gradient(180deg, #fb7185, #e11d48); }
+.fx-item.fx-danger:hover, .fx-item.fx-danger:focus-visible { box-shadow: 0 6px 16px -10px rgba(225, 29, 72, 0.45); }
+/* full-width mega menus: slide down gently (no scale on wide panels) */
+@keyframes fxPanelIn {
+  0% { opacity: 0; transform: translateY(-12px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.fx-panel { animation: fxPanelIn 0.55s cubic-bezier(0.16, 1, 0.3, 1) both; }
+@media (prefers-reduced-motion: reduce) { .fx-panel { animation: none; } }
+
+/* ───────────── Bottom toolbar: advanced tool hover ─────────────
+   .fx-tool → cursor-following glow + growing bottom accent line.
+   Purely decorative layers: the buttons keep their own scale / click animations. */
+.fx-tool { isolation: isolate; }
+.fx-tool::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background:
+    radial-gradient(90px circle at var(--mx, 50%) var(--my, 50%), rgba(13, 153, 255, 0.18), transparent 65%),
+    linear-gradient(180deg, rgba(13, 153, 255, 0.06), rgba(13, 153, 255, 0.02));
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+.fx-tool::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  height: 2px;
+  width: 0;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #38bdf8, #0d99ff);
+  transform: translateX(-50%);
+  transition: width 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+  z-index: 1;
+}
+.fx-tool:hover::after,
+.fx-tool:focus-visible::after { opacity: 1; }
+.fx-tool:hover::before,
+.fx-tool:focus-visible::before { width: 46%; }
+@media (prefers-reduced-motion: reduce) {
+  .fx-tool::before, .fx-tool::after { transition: none; }
+}
+
+/* Hide a scrollbar but keep the element scrollable (swipe / drag / wheel) */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Template / design load: smooth spring bloom as elements settle onto the canvas */
+@keyframes fxDesignIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.93);
+    filter: blur(0.8px);
+  }
+  65% {
+    filter: blur(0);
+    transform: scale(1.018);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+}
+.fx-design-in {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  animation: fxDesignIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+@media (prefers-reduced-motion: reduce) { .fx-design-in { animation: none; } }
+
+/* Template preview modal: opens slowly — backdrop fades, card rises & settles, stamp unfolds last */
+@keyframes fxModalBackdrop { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fxModalOpen {
+  0% { opacity: 0; transform: translateY(28px) scale(0.92); filter: blur(4px); }
+  60% { filter: blur(0); }
+  100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+}
+@keyframes fxModalStamp {
+  0% { opacity: 0; transform: scale(0.8) rotate(-6deg); }
+  70% { opacity: 1; transform: scale(1.02) rotate(0.5deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0); }
+}
+.fx-modal-backdrop { animation: fxModalBackdrop 0.6s ease-out backwards; }
+.fx-modal-open { animation: fxModalOpen 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.1s backwards; }
+.fx-modal-stamp { animation: fxModalStamp 1.1s cubic-bezier(0.22, 1, 0.36, 1) 0.45s backwards; }
+@media (prefers-reduced-motion: reduce) {
+  .fx-modal-backdrop, .fx-modal-open, .fx-modal-stamp { animation: none; }
+}
+
+/* Setup / Clixio AI tabs: the panel opens slowly, sections follow one by one */
+@keyframes fxTabIn {
+  0% { opacity: 0; transform: translateY(14px); filter: blur(3px); }
+  60% { filter: blur(0); }
+  100% { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+@keyframes fxPillIn { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: scale(1); } }
+@keyframes fxPopIn {
+  0% { opacity: 0; transform: scale(0.7); }
+  70% { opacity: 1; transform: scale(1.08); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.fx-tab-in { animation: fxTabIn 0.7s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+.fx-pop-in { animation: fxPopIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.fx-tab-stagger { animation: none; }
+.fx-tab-stagger > * { animation: fxTabIn 0.7s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+.fx-tab-stagger > *:nth-child(1) { animation-delay: 0.05s; }
+.fx-tab-stagger > *:nth-child(2) { animation-delay: 0.15s; }
+.fx-tab-stagger > *:nth-child(3) { animation-delay: 0.25s; }
+.fx-tab-stagger > *:nth-child(4) { animation-delay: 0.35s; }
+.fx-tab-stagger > *:nth-child(5) { animation-delay: 0.45s; }
+.fx-tab-stagger > *:nth-child(n + 6) { animation-delay: 0.55s; }
+.fx-pill-in { animation: fxPillIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+@media (prefers-reduced-motion: reduce) {
+  .fx-tab-in, .fx-tab-stagger > *, .fx-pill-in { animation: none; }
 }

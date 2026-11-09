@@ -19,6 +19,10 @@ export function autoNestStampsOnA4(
   const { widthMm: pageW } = getA4PageDimensions(config.orientation);
   const margin = config.marginMm || 10;
   const gap = config.spacingMm || 4;
+  // crop marks stick out 2.5 mm on every side and a size label sits under each stamp —
+  // keep enough room so neighbours' marks and labels never run into each other
+  const colGap = Math.max(gap, 6);
+  const rowGap = Math.max(gap, 6) + 3.5;
 
   let currentX = margin;
   let currentY = margin + 12; // Leave space for top header
@@ -28,7 +32,7 @@ export function autoNestStampsOnA4(
     // Check if stamp fits in current row
     if (currentX + inst.widthMm > pageW - margin && currentX > margin) {
       currentX = margin;
-      currentY += maxRowHeight + gap;
+      currentY += maxRowHeight + rowGap;
       maxRowHeight = 0;
     }
 
@@ -36,7 +40,7 @@ export function autoNestStampsOnA4(
     const placedY = currentY;
 
     maxRowHeight = Math.max(maxRowHeight, inst.heightMm);
-    currentX += inst.widthMm + gap;
+    currentX += inst.widthMm + colGap;
 
     return {
       ...inst,
@@ -305,9 +309,13 @@ export function generateA4SheetSvg(
       distressEffect: false,
     });
 
-    // Extract internal content from stamp SVG (strip outer <svg> tags)
-    const contentMatch = stampSvgRaw.match(/<g id="stamp-content"[\s\S]*?<\/g>/);
-    const innerContent = contentMatch ? contentMatch[0] : stampSvgRaw;
+    // Embed the whole stamp SVG as a nested <svg> sized in mm (its viewBox maps 1 unit = 1 mm).
+    // Cutting out <g id="stamp-content">…</g> with a regex stopped at the first nested </g>,
+    // which pushed the rest of the design (text groups, rings…) outside the stamp.
+    const innerContent = stampSvgRaw
+      .replace(/width="[^"]*mm"/, `width="${inst.widthMm}"`)
+      .replace(/height="[^"]*mm"/, `height="${inst.heightMm}" x="0" y="0" overflow="visible"`)
+      .replace(/style="background-color: none;"/, '');
 
     // Corner tick marks (Crop Marks) for physical cutting
     const tickLen = 2.5;

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { useEditor } from '../../context/EditorContext';
 import { Toolbar } from '../../components/editor/Toolbar';
 import { Canvas } from '../../components/editor/Canvas';
@@ -9,20 +9,38 @@ import { PropertiesPanel } from '../../components/editor/PropertiesPanel';
 import { LayersPanel } from '../../components/editor/LayersPanel';
 import { ClipartModal } from '../../components/editor/ClipartModal';
 import { ExportModal } from '../../components/editor/ExportModal';
+import { SupportModal } from '../../components/common/SupportModal';
+import { ARRealWorldModal } from '../../components/editor/ARRealWorldModal';
+import { InteractiveDesignModal } from '../../components/editor/InteractiveDesignModal';
 
 export default function EditorPage() {
-  const { viewMode, loadAiGeneratedStamp } = useEditor();
+  const { viewMode, viewRestored, loadAiGeneratedStamp } = useEditor();
   const [activeView, setActiveView] = useState(viewMode);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [isClipartModalOpen, setIsClipartModalOpen] = useState<boolean>(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
+  const [isSupportModalOpen, setIsSupportModalOpen] = useState<boolean>(false);
+  const [isARModalOpen, setIsARModalOpen] = useState<boolean>(false);
+  const [isInteractiveModalOpen, setIsInteractiveModalOpen] = useState<boolean>(false);
   const [activeRightTab, setActiveRightTab] = useState<'SETUP' | 'AI'>('SETUP');
 
-  // Futuristic View Transition Effect
+  // On load, jump straight to the saved view (Single / A4) — no flash, no switch animation
+  const initialViewSetRef = useRef(false);
+  const shownViewRef = useRef(viewMode); // the view on screen (updated synchronously)
+  useLayoutEffect(() => {
+    if (!viewRestored || initialViewSetRef.current) return;
+    initialViewSetRef.current = true;
+    shownViewRef.current = viewMode;
+    setActiveView(viewMode);
+  }, [viewRestored, viewMode]);
+
+  // Futuristic View Transition Effect (only for switches the user makes)
   useEffect(() => {
-    if (viewMode !== activeView) {
+    if (!initialViewSetRef.current) return;
+    if (viewMode !== shownViewRef.current) {
       setIsTransitioning(true);
       const timer = setTimeout(() => {
+        shownViewRef.current = viewMode;
         setActiveView(viewMode);
         setIsTransitioning(false);
       }, 350); // Futuristic exit duration
@@ -54,9 +72,9 @@ export default function EditorPage() {
   }, [loadAiGeneratedStamp]);
 
   return (
-    <div className="flex flex-row h-screen w-full overflow-hidden bg-[#f5f5f5]">
+    <div className="flex flex-row h-screen w-full overflow-hidden bg-[#f5f5f5] dark:bg-[#0b0f19] text-slate-900 dark:text-slate-100 transition-colors">
       {/* 1. Left: Full-Height Figma Rail & Layers / Pages Panel (Only in Single Stamp mode) */}
-      <div className={`transition-all duration-300 ${activeView === 'SINGLE' && !isTransitioning ? 'w-64 opacity-100 translate-x-0' : 'w-0 opacity-0 -translate-x-10 overflow-hidden'}`}>
+      <div className={`${viewRestored ? 'transition-all duration-300' : ''} ${viewRestored && activeView === 'SINGLE' && !isTransitioning ? 'w-64 opacity-100 translate-x-0' : 'w-0 opacity-0 -translate-x-10 overflow-hidden'}`}>
         <LayersPanel />
       </div>
 
@@ -66,13 +84,14 @@ export default function EditorPage() {
         <Toolbar
           onOpenClipartModal={() => setIsClipartModalOpen(true)}
           onOpenExportModal={() => setIsExportModalOpen(true)}
+          onOpenSupportModal={() => setIsSupportModalOpen(true)}
         />
 
         {/* View Mode Switching with Futuristic Transition */}
-        <div className="flex-1 relative overflow-hidden perspective-[1000px] bg-slate-100/50">
+        <div className="flex-1 relative overflow-hidden perspective-[1000px] bg-slate-100/50 dark:bg-[#0b0f19]">
           <div 
             className={`absolute inset-0 flex flex-col transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]
-              ${isTransitioning ? 'opacity-0 scale-90 blur-[12px] rotate-x-6 -translate-y-4 pointer-events-none' : 'opacity-100 scale-100 blur-0 rotate-x-0 translate-y-0'}
+              ${!viewRestored ? 'invisible' : isTransitioning ? 'opacity-0 scale-90 blur-[12px] rotate-x-6 -translate-y-4 pointer-events-none' : 'opacity-100 scale-100 blur-0 rotate-x-0 translate-y-0'}
             `}
             style={{ transformStyle: 'preserve-3d' }}
           >
@@ -108,6 +127,25 @@ export default function EditorPage() {
       <ExportModal
         isOpen={isExportModalOpen}
         onClose={() => setIsExportModalOpen(false)}
+        onOpenARModal={() => setIsARModalOpen(true)}
+      />
+
+      {/* Support, Requirements & Suggestions Modal */}
+      <SupportModal
+        isOpen={isSupportModalOpen}
+        onClose={() => setIsSupportModalOpen(false)}
+      />
+
+      {/* Real-World AR Camera & Document Impression Preview */}
+      <ARRealWorldModal
+        isOpen={isARModalOpen}
+        onClose={() => setIsARModalOpen(false)}
+      />
+
+      {/* Interactive Design Selector (Style, Shape, Content Preset) */}
+      <InteractiveDesignModal
+        isOpen={isInteractiveModalOpen}
+        onClose={() => setIsInteractiveModalOpen(false)}
       />
     </div>
   );

@@ -1,0 +1,17 @@
+[
+  {
+    "id": "SUG-MW4M8HLO",
+    "type": "SUGGESTION",
+    "subject": "Add dark mode to A4 sheet",
+    "message": "Would be easier on the eyes",
+    "email": "user@test.com",
+    "createdAt": "2026-11-06T06:50:57.180Z"
+  },
+  {
+    "id": "REQ-MW4M4DW7",
+    "type": "REQUIREMENT",
+    "subject": "Trodat 4912 Mount",
+    "message": "Need 55x35mm size support",
+    "createdAt": "2026-11-06T06:47:45.751Z"
+  }
+]

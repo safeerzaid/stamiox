@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useEditor } from '../../context/EditorContext';
+import { useTheme } from '../../context/ThemeContext';
 import { A4StampInstance, COMMON_A4_PRESET_SIZES } from '../../types/a4-sheet';
 import {
   getA4PageDimensions,
@@ -9,7 +10,9 @@ import {
   downloadA4Svg,
   downloadA4Pdf,
   cloneStampToSize,
+  autoNestStampsOnA4,
 } from '../../lib/a4-export-engine';
+import { morphBetweenShapeFamilies } from '../../lib/shape-morph';
 import { generateStampSvg } from '../../lib/svg-generator';
 import {
   Printer,
@@ -40,6 +43,13 @@ import {
   Edit3,
 } from 'lucide-react';
 
+// Stamp SVG markup — only touches the DOM when the markup really changes (a fresh
+// { __html } object on every render made React re-insert every stamp, e.g. on each drag frame)
+const RawSvgGroup = React.memo(
+  ({ html }: { html: string }) => <g dangerouslySetInnerHTML={{ __html: html }} />,
+  (a, b) => a.html === b.html
+);
+
 // Symmetrical Modern Stepper Component
 const ModernStepper: React.FC<{
   value: number;
@@ -63,7 +73,7 @@ const ModernStepper: React.FC<{
 
   return (
     <div
-      className={`flex items-center h-8 bg-slate-50/90 hover:bg-slate-100/70 rounded-xl border border-slate-200/80 focus-within:border-[#0d99ff] focus-within:ring-2 focus-within:ring-[#0d99ff]/15 focus-within:bg-white transition-all shadow-2xs overflow-hidden ${
+      className={`flex items-center h-8 bg-slate-50/90 dark:bg-slate-800/60 hover:bg-slate-100/70 dark:hover:bg-slate-800 rounded-xl border border-slate-200/80 dark:border-slate-700 focus-within:border-[#0d99ff] focus-within:ring-2 focus-within:ring-[#0d99ff]/15 focus-within:bg-white transition-all shadow-2xs overflow-hidden ${
         disabled ? 'opacity-40 pointer-events-none' : ''
       }`}
     >
@@ -71,12 +81,12 @@ const ModernStepper: React.FC<{
         type="button"
         onClick={handleDecrement}
         disabled={disabled || (min !== undefined && value <= min)}
-        className="w-7 h-full flex items-center justify-center text-slate-500 hover:text-[#0d99ff] hover:bg-slate-200/60 active:bg-slate-300/60 disabled:opacity-30 transition-colors shrink-0 select-none cursor-pointer"
+        className="w-7 h-full flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-[#0d99ff] hover:bg-slate-200/60 dark:hover:bg-slate-700/60 active:bg-slate-300/60 dark:active:bg-slate-600/60 disabled:opacity-30 transition-colors shrink-0 select-none cursor-pointer"
         title={`Decrease (-${step}${unit})`}
       >
         <Minus className="w-3 h-3 stroke-[2.2]" />
       </button>
-      <div className="flex-1 flex items-center justify-center min-w-0 px-1 border-x border-slate-200/80 h-full">
+      <div className="flex-1 flex items-center justify-center min-w-0 px-1 border-x border-slate-200/80 dark:border-slate-700 h-full">
         <input
           type="number"
           step={step}
@@ -88,20 +98,75 @@ const ModernStepper: React.FC<{
             if (!isNaN(val)) onChange(val);
           }}
           disabled={disabled}
-          className="w-full text-center bg-transparent font-mono font-bold text-xs text-slate-800 outline-none p-0"
+          className="w-full text-center bg-transparent font-mono font-bold text-xs text-slate-800 dark:text-slate-100 outline-none p-0"
         />
-        {unit && <span className="text-[10px] text-slate-400 font-medium select-none ml-0.5">{unit}</span>}
+        {unit && <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium select-none ml-0.5">{unit}</span>}
       </div>
       <button
         type="button"
         onClick={handleIncrement}
         disabled={disabled || (max !== undefined && value >= max)}
-        className="w-7 h-full flex items-center justify-center text-slate-500 hover:text-[#0d99ff] hover:bg-slate-200/60 active:bg-slate-300/60 disabled:opacity-30 transition-colors shrink-0 select-none cursor-pointer"
+        className="w-7 h-full flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-[#0d99ff] hover:bg-slate-200/60 dark:hover:bg-slate-700/60 active:bg-slate-300/60 dark:active:bg-slate-600/60 disabled:opacity-30 transition-colors shrink-0 select-none cursor-pointer"
         title={`Increase (+${step}${unit})`}
       >
         <Plus className="w-3 h-3 stroke-[2.2]" />
       </button>
     </div>
+  );
+};
+
+// Compact "X  54.5 mm" field: type a value, or use ↑ / ↓ (Shift = ×10)
+const SheetNumberField: React.FC<{
+  label: string;
+  value: number;
+  step?: number;
+  onChange: (val: number) => void;
+}> = ({ label, value, step = 1, onChange }) => {
+  const fmt = (v: number) => (isNaN(v) ? '' : String(Number(v.toFixed(1))));
+  const [draft, setDraft] = useState(fmt(value));
+  const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    if (!focused) setDraft(fmt(value));
+  }, [value, focused]);
+
+  const commit = (text: string) => {
+    const v = parseFloat(text);
+    if (!isNaN(v)) onChange(Number(v.toFixed(2)));
+  };
+
+  return (
+    <label className="h-8 flex items-center gap-1.5 px-2.5 rounded-md bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 focus-within:bg-white dark:focus-within:bg-slate-800 ring-1 ring-transparent focus-within:ring-[#0d99ff] transition-colors cursor-text">
+      <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500 select-none">{label}</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={draft}
+        onFocus={(e) => {
+          setFocused(true);
+          e.currentTarget.select();
+        }}
+        onBlur={() => {
+          setFocused(false);
+          commit(draft);
+        }}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          commit(e.target.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            const next = Number((value + (e.key === 'ArrowUp' ? 1 : -1) * step * (e.shiftKey ? 10 : 1)).toFixed(2));
+            onChange(next);
+            setDraft(fmt(next));
+          } else if (e.key === 'Enter') {
+            (e.currentTarget as HTMLInputElement).blur();
+          }
+        }}
+        className="min-w-0 flex-1 bg-transparent text-[12px] text-slate-800 dark:text-slate-100 tabular-nums outline-none"
+      />
+      <span className="text-[11px] text-slate-400 dark:text-slate-500 select-none">mm</span>
+    </label>
   );
 };
 
@@ -131,6 +196,13 @@ export const A4ProductionSheet: React.FC = () => {
     editA4InstanceInSingleEditor,
   } = useEditor();
 
+  // On screen only (printing uses printA4Sheet): dark theme shows a dark sheet with white ink;
+  // Laser Invert flips it back to a light sheet. In light theme Invert shows white on black as before.
+  const { resolvedTheme } = useTheme();
+  const isDark = resolvedTheme === 'dark';
+  const screenInvert = a4Config.laserInvert && !isDark;
+  const darkPaper = isDark && !a4Config.laserInvert;
+
   const [a4Zoom, setA4Zoom] = useState<number>(0.58);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isSpacePressed, setIsSpacePressed] = useState<boolean>(false);
@@ -139,6 +211,20 @@ export const A4ProductionSheet: React.FC = () => {
   const isSpacePressedRef = useRef<boolean>(false);
   const isPanningRef = useRef<boolean>(false);
   const lastMousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const sheetAreaRef = useRef<HTMLDivElement>(null);
+  // the key handler is registered once — read the live selection / delete through refs
+  const selectedIdRef = useRef<string | null>(selectedA4InstanceId);
+  selectedIdRef.current = selectedA4InstanceId;
+  const deleteRef = useRef(deleteA4Instance);
+  deleteRef.current = deleteA4Instance;
+  const [confirmClear, setConfirmClear] = useState(false);
+  useEffect(() => {
+    if (!confirmClear) return;
+    const t = window.setTimeout(() => setConfirmClear(false), 3000);
+    return () => window.clearTimeout(t);
+  }, [confirmClear]);
+  const a4ZoomRef = useRef(a4Zoom);
+  a4ZoomRef.current = a4Zoom;
   const hasDuplicatedOnAltDragRef = useRef<boolean>(false);
 
   const [isDraggingStamp, setIsDraggingStamp] = useState<boolean>(false);
@@ -151,13 +237,6 @@ export const A4ProductionSheet: React.FC = () => {
 
   const { widthMm: pageW, heightMm: pageH } = getA4PageDimensions(a4Config.orientation);
 
-  // If no instances yet, automatically populate with current design
-  useEffect(() => {
-    if (a4Instances.length === 0 && currentElements.length > 0) {
-      addCurrentToA4();
-    }
-  }, []);
-
   // Global Spacebar Key & Window-Level Pointer listeners for Butter-Smooth Pan (Figma / Illustrator style)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -169,6 +248,11 @@ export const A4ProductionSheet: React.FC = () => {
         e.preventDefault();
         isSpacePressedRef.current = true;
         setIsSpacePressed(true);
+      }
+      // Delete / Backspace removes the selected stamp from the sheet
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIdRef.current) {
+        e.preventDefault();
+        deleteRef.current(selectedIdRef.current);
       }
     };
 
@@ -205,19 +289,28 @@ export const A4ProductionSheet: React.FC = () => {
       }
     };
 
-    // ONLY Ctrl + Mouse Wheel zooms in / zooms out (Normal wheel does NOT move the A4 sheet)
+    // Wheel over the sheet: scroll it (Shift = sideways). Ctrl / Cmd + wheel zooms.
     const handleWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) {
-        return; // Don't move the A4 sheet when scrolling wheel normally
-      }
-
       const target = e.target as HTMLElement;
-      const isInsideSidebar = target && target.closest('aside');
-      if (isInsideSidebar) {
-        return;
-      }
+      const area = sheetAreaRef.current;
+      if (!area || !target || !area.contains(target)) return; // sidebars and panels scroll normally
 
       e.preventDefault();
+
+      if (!e.ctrlKey && !e.metaKey) {
+        const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? area.clientHeight : 1;
+        let dx = e.deltaX * unit;
+        let dy = e.deltaY * unit;
+        if (e.shiftKey && !dx) { dx = dy; dy = 0; }
+        // keep part of the sheet on screen
+        const z = a4ZoomRef.current;
+        const longSide = Math.max(pageW, pageH) * 3.7795 * z; // same for portrait / landscape
+        const maxX = longSide / 2 + area.clientWidth / 2 - 120;
+        const maxY = longSide / 2 + area.clientHeight / 2 - 120;
+        const clamp = (v: number, m: number) => Math.max(-Math.max(0, m), Math.min(Math.max(0, m), v));
+        setPanOffset((prev) => ({ x: clamp(prev.x - dx, maxX), y: clamp(prev.y - dy, maxY) }));
+        return;
+      }
 
       const zoomDelta = e.deltaY < 0 ? 1.08 : 0.92;
       setA4Zoom((prev) => Math.min(3.5, Math.max(0.2, Number((prev * zoomDelta).toFixed(3)))));
@@ -332,8 +425,13 @@ export const A4ProductionSheet: React.FC = () => {
       currentInk,
       preset.mountName
     );
+    // borders redrawn at the new size / shape, everything else scaled evenly to fit inside
+    const tag = Math.random().toString(36).slice(2, 6);
+    newInst.elements = morphBetweenShapeFamilies(currentElements, currentW, currentH, preset.widthMm, preset.heightMm, preset.shape).map(
+      (el: any) => ({ ...el, id: `${el.id}-${tag}` })
+    );
 
-    setA4Instances((prev) => [...prev, newInst]);
+    setA4Instances((prev) => autoNestStampsOnA4([...prev, newInst], a4Config));
     setSelectedA4InstanceId(newInst.instanceId);
     setIsAddPresetOpen(false);
   };
@@ -342,7 +440,7 @@ export const A4ProductionSheet: React.FC = () => {
 
   return (
     <div
-      className={`relative flex-1 flex flex-row h-full overflow-hidden bg-[#eef2f6] select-none ${
+      className={`relative flex-1 flex flex-row h-full overflow-hidden bg-[#eef2f6] dark:bg-slate-950 select-none ${
         isPanning ? 'cursor-grabbing' : isSpacePressed ? 'cursor-grab' : ''
       }`}
       onPointerMove={handleSheetPointerMove}
@@ -352,205 +450,157 @@ export const A4ProductionSheet: React.FC = () => {
       {/* --- 1. LEFT SIDEBAR: A4 IMPOSITION TOOLKIT --- */}
       <aside
         onClick={(e) => e.stopPropagation()}
-        className="w-72 bg-white border-r border-slate-200/90 flex flex-col p-4 z-20 shrink-0 gap-4 overflow-y-auto shadow-xs"
+        className="w-64 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-20 shrink-0 overflow-y-auto"
       >
-        {/* Header Sheet Info */}
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div>
-            <span className="font-bold text-sm text-slate-900 block">A4 Gang-Sheet</span>
-            <span className="text-[11px] text-slate-400 font-mono">
-              {pageW} × {pageH} mm (1:1 Scale)
-            </span>
-          </div>
-          <span className="px-2 py-0.5 rounded-full bg-blue-50 text-[#0d99ff] border border-blue-200 font-mono text-[10px] font-bold">
-            {a4Instances.length} {a4Instances.length === 1 ? 'Stamp' : 'Stamps'}
-          </span>
+        {/* Header */}
+        <div className="px-4 pt-4 pb-3 border-b border-slate-100 dark:border-slate-800">
+          <h2 className="text-[13px] font-semibold text-slate-900 dark:text-white">A4 sheet</h2>
+          <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5 tabular-nums">
+            {pageW} × {pageH} mm · {a4Instances.length} {a4Instances.length === 1 ? 'stamp' : 'stamps'}
+          </p>
         </div>
 
-        {/* Section: Stamp Generation */}
-        <div className="space-y-2">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-            Add & Arrange Stamps
-          </span>
+        <div className="flex-1 px-4 py-4 space-y-5">
+          {/* Add stamps */}
+          <section className="space-y-1.5">
+            <h3 className="text-[12px] font-semibold text-slate-800 dark:text-slate-100 mb-2">Add stamps</h3>
 
-          {/* Add Current Stamp */}
-          <button
-            type="button"
-            onClick={addCurrentToA4}
-            className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold text-xs shadow-2xs hover:border-[#0d99ff] hover:text-[#0d99ff] transition-all cursor-pointer"
-          >
-            <Plus className="w-4 h-4 text-[#0d99ff]" />
-            <span>Add Stamp (Current Size)</span>
-          </button>
-
-          {/* Clone In Standard Size Dropdown */}
-          <div className="relative">
             <button
               type="button"
-              onClick={() => setIsAddPresetOpen(!isAddPresetOpen)}
-              className="w-full flex items-center justify-between py-2 px-3 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold text-xs shadow-2xs transition-all cursor-pointer"
+              onClick={addCurrentToA4}
+              className="w-full h-9 flex items-center justify-center gap-1.5 rounded-lg bg-slate-900 dark:bg-white hover:bg-slate-800 dark:hover:bg-slate-100 text-white dark:text-slate-900 text-[12px] font-semibold transition-colors cursor-pointer"
             >
-              <div className="flex items-center gap-2">
-                <Maximize2 className="w-3.5 h-3.5 text-slate-500" />
-                <span>Clone In Size...</span>
-              </div>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+              <Plus className="w-4 h-4" />
+              Add current stamp
             </button>
 
-            {isAddPresetOpen && (
-              <div className="absolute left-0 mt-1 w-full bg-white rounded-2xl shadow-xl border border-slate-100 p-2 z-50 text-xs animate-in fade-in zoom-in-95 duration-100 max-h-60 overflow-y-auto">
-                <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                  Select Target Mount Size
-                </div>
-                <div className="space-y-1 mt-1">
+            {/* Clone in another size */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsAddPresetOpen(!isAddPresetOpen)}
+                aria-expanded={isAddPresetOpen}
+                className={`w-full h-9 flex items-center gap-2.5 px-2.5 rounded-lg text-[12px] text-slate-700 dark:text-slate-200 transition-colors cursor-pointer ${
+                  isAddPresetOpen ? 'bg-slate-100 dark:bg-slate-800' : 'hover:bg-slate-50 dark:hover:bg-slate-800'
+                }`}
+              >
+                <Maximize2 className="w-4 h-4 text-slate-400 dark:text-slate-500" />
+                Add in another size
+                <ChevronDown className={`ml-auto w-3.5 h-3.5 text-slate-400 transition-transform duration-300 ${isAddPresetOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {isAddPresetOpen && (
+                <div className="absolute left-0 right-0 mt-1 bg-white dark:bg-slate-900 rounded-xl shadow-xl ring-1 ring-slate-200 dark:ring-slate-700 p-1 z-50 max-h-64 overflow-y-auto fx-menu">
                   {COMMON_A4_PRESET_SIZES.map((preset) => (
                     <button
                       key={preset.id}
                       onClick={() => handleAddPresetSize(preset)}
-                      className="w-full text-left px-3 py-2 rounded-xl hover:bg-blue-50/80 hover:text-[#0d99ff] transition-all flex items-center justify-between group cursor-pointer"
+                      className="fx-item w-full text-left px-2.5 py-1.5 rounded-md flex items-center justify-between gap-2 cursor-pointer"
                     >
-                      <div>
-                        <div className="font-semibold text-slate-800 group-hover:text-[#0d99ff]">
-                          {preset.label}
-                        </div>
-                        <div className="text-[10px] text-slate-400">{preset.mountName}</div>
-                      </div>
-                      <Plus className="w-3.5 h-3.5 text-slate-300 group-hover:text-[#0d99ff]" />
+                      <span className="min-w-0">
+                        <span className="block text-[12px] font-medium text-slate-800 dark:text-slate-100">{preset.label}</span>
+                        <span className="block text-[10.5px] text-slate-400 dark:text-slate-500 truncate">{preset.mountName}</span>
+                      </span>
+                      <Plus className="w-3.5 h-3.5 text-slate-300 dark:text-slate-600 shrink-0" />
                     </button>
                   ))}
                 </div>
-              </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={generateA4SizeVariants}
+              title="Adds the current design in 5 common sizes"
+              className="w-full h-9 flex items-center gap-2.5 px-2.5 rounded-lg text-[12px] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              <Sparkles className="w-4 h-4 text-slate-400 dark:text-slate-500" />
+              Add 5 sizes
+            </button>
+
+            <button
+              type="button"
+              onClick={autoNestA4}
+              title="Packs all stamps tightly to save rubber"
+              className="w-full h-9 flex items-center gap-2.5 px-2.5 rounded-lg text-[12px] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              <Scissors className="w-4 h-4 text-slate-400 dark:text-slate-500" />
+              Auto-pack
+              <span className="ml-auto text-[10.5px] text-slate-400 dark:text-slate-500">saves rubber</span>
+            </button>
+
+            {/* Clear the whole sheet — second click confirms */}
+            {a4Instances.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  clearA4Instances();
+                }}
+                title="Remove all stamps from the A4 sheet"
+                className="w-full h-9 flex items-center gap-2.5 px-2.5 rounded-lg text-[12px] text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                Clear sheet
+                <span className="ml-auto text-[10.5px] opacity-70 tabular-nums">{a4Instances.length} stamps</span>
+              </button>
             )}
-          </div>
+          </section>
 
-          {/* Auto Multi-Sizes */}
-          <button
-            type="button"
-            onClick={generateA4SizeVariants}
-            className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-blue-50/80 hover:bg-blue-100 border border-blue-200/80 text-[#0d99ff] font-bold text-xs rounded-xl shadow-2xs transition-all cursor-pointer"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Auto Multi-Sizes (5 Sizes)</span>
-          </button>
-
-          {/* Auto-Pack */}
-          <button
-            type="button"
-            onClick={autoNestA4}
-            className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 font-bold text-xs rounded-xl shadow-2xs transition-all cursor-pointer"
-          >
-            <Scissors className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Auto-Pack (Save Rubber)</span>
-          </button>
+          {/* Output */}
+          <section className="space-y-0.5 pt-4 border-t border-slate-100 dark:border-slate-800">
+            <h3 className="text-[12px] font-semibold text-slate-800 dark:text-slate-100 mb-1.5">Output</h3>
+            {([
+              { key: 'laserInvert', label: 'Invert', hint: 'White on black relief', Icon: Contrast },
+              { key: 'laserMirror', label: 'Mirror', hint: 'Horizontal plate mirror', Icon: FlipHorizontal },
+              { key: 'showCropMarks', label: 'Crop marks', hint: 'Corner cutting ticks', Icon: Maximize2 },
+              { key: 'showCutLines', label: 'Cut outlines', hint: 'Dashed box around each stamp', Icon: Scissors },
+            ] as const).map(({ key, label, hint, Icon }) => {
+              const on = !!(a4Config as any)[key];
+              return (
+                <label key={key} title={hint} className="flex items-center gap-2.5 h-9 -mx-1.5 px-1.5 rounded-md hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">
+                  <Icon className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />
+                  <span className="text-[12px] text-slate-700 dark:text-slate-200">{label}</span>
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={(e) => setA4Config((prev) => ({ ...prev, [key]: e.target.checked }))}
+                    className="sr-only"
+                  />
+                  <span aria-hidden className={`ml-auto relative w-7 h-4 rounded-full shrink-0 transition-colors ${on ? 'bg-[#0d99ff]' : 'bg-slate-200 dark:bg-slate-700'}`}>
+                    <span className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${on ? 'translate-x-3' : ''}`} />
+                  </span>
+                </label>
+              );
+            })}
+          </section>
         </div>
 
-        {/* Section: Premium Production Settings */}
-        <div className="pt-4 pb-2 border-t border-slate-100">
-          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-3 px-1">
-            Production Settings
-          </span>
-          <div className="grid grid-cols-1 gap-2.5">
-            {/* Setting: Laser Invert */}
-            <label className="group relative flex items-center justify-between p-3.5 rounded-2xl bg-white hover:bg-slate-50/60 border-2 border-slate-200/50 hover:border-[#0d99ff]/30 shadow-sm hover:shadow-md hover:shadow-[#0d99ff]/5 cursor-pointer transition-all duration-300 overflow-hidden">
-              <input type="checkbox" checked={a4Config.laserInvert} onChange={(e) => setA4Config((prev) => ({ ...prev, laserInvert: e.target.checked }))} className="sr-only peer" />
-              <div className="absolute inset-0 bg-[#0d99ff]/0 peer-checked:bg-[#0d99ff]/[0.04] transition-colors duration-300" />
-              <div className="relative z-10 flex items-center gap-3">
-                <div className={`p-2 rounded-xl transition-all duration-300 ${a4Config.laserInvert ? 'bg-[#0d99ff] text-white shadow-md shadow-[#0d99ff]/30' : 'bg-slate-100 text-slate-500 group-hover:bg-[#0d99ff]/10 group-hover:text-[#0d99ff]'}`}>
-                  <Contrast className="w-4 h-4" />
-                </div>
-                <div className="flex flex-col">
-                  <span className={`font-bold text-sm tracking-tight transition-colors duration-300 ${a4Config.laserInvert ? 'text-[#0d99ff]' : 'text-slate-700'}`}>Laser Invert</span>
-                  <span className="text-[10px] text-slate-400 font-medium">White on black relief</span>
-                </div>
-              </div>
-              <div className={`relative z-10 w-5 h-5 rounded-md flex items-center justify-center border transition-all duration-300 ${a4Config.laserInvert ? 'bg-[#0d99ff] border-[#0d99ff]' : 'bg-transparent border-slate-300 group-hover:border-[#0d99ff]/50'}`}>
-                <Check className={`w-3.5 h-3.5 text-white transition-transform duration-300 ${a4Config.laserInvert ? 'scale-100 opacity-100' : 'scale-50 opacity-0'}`} strokeWidth={3} />
-              </div>
-            </label>
-
-            {/* Setting: Mirror Flipping */}
-            <label className="group relative flex items-center justify-between p-3.5 rounded-2xl bg-white hover:bg-slate-50/60 border-2 border-slate-200/50 hover:border-[#0d99ff]/30 shadow-sm hover:shadow-md hover:shadow-[#0d99ff]/5 cursor-pointer transition-all duration-300 overflow-hidden">
-              <input type="checkbox" checked={a4Config.laserMirror} onChange={(e) => setA4Config((prev) => ({ ...prev, laserMirror: e.target.checked }))} className="sr-only peer" />
-              <div className="absolute inset-0 bg-[#0d99ff]/0 peer-checked:bg-[#0d99ff]/[0.04] transition-colors duration-300" />
-              <div className="relative z-10 flex items-center gap-3">
-                <div className={`p-2 rounded-xl transition-all duration-300 ${a4Config.laserMirror ? 'bg-[#0d99ff] text-white shadow-md shadow-[#0d99ff]/30' : 'bg-slate-100 text-slate-500 group-hover:bg-[#0d99ff]/10 group-hover:text-[#0d99ff]'}`}>
-                  <FlipHorizontal className="w-4 h-4" />
-                </div>
-                <div className="flex flex-col">
-                  <span className={`font-bold text-sm tracking-tight transition-colors duration-300 ${a4Config.laserMirror ? 'text-[#0d99ff]' : 'text-slate-700'}`}>Mirror Flipping</span>
-                  <span className="text-[10px] text-slate-400 font-medium">Horizontal plate mirror</span>
-                </div>
-              </div>
-              <div className={`relative z-10 w-5 h-5 rounded-md flex items-center justify-center border transition-all duration-300 ${a4Config.laserMirror ? 'bg-[#0d99ff] border-[#0d99ff]' : 'bg-transparent border-slate-300 group-hover:border-[#0d99ff]/50'}`}>
-                <Check className={`w-3.5 h-3.5 text-white transition-transform duration-300 ${a4Config.laserMirror ? 'scale-100 opacity-100' : 'scale-50 opacity-0'}`} strokeWidth={3} />
-              </div>
-            </label>
-
-            {/* Setting: Show Crop Marks */}
-            <label className="group relative flex items-center justify-between p-3.5 rounded-2xl bg-white hover:bg-slate-50/60 border-2 border-slate-200/50 hover:border-[#0d99ff]/30 shadow-sm hover:shadow-md hover:shadow-[#0d99ff]/5 cursor-pointer transition-all duration-300 overflow-hidden">
-              <input type="checkbox" checked={a4Config.showCropMarks} onChange={(e) => setA4Config((prev) => ({ ...prev, showCropMarks: e.target.checked }))} className="sr-only peer" />
-              <div className="absolute inset-0 bg-[#0d99ff]/0 peer-checked:bg-[#0d99ff]/[0.04] transition-colors duration-300" />
-              <div className="relative z-10 flex items-center gap-3">
-                <div className={`p-2 rounded-xl transition-all duration-300 ${a4Config.showCropMarks ? 'bg-[#0d99ff] text-white shadow-md shadow-[#0d99ff]/30' : 'bg-slate-100 text-slate-500 group-hover:bg-[#0d99ff]/10 group-hover:text-[#0d99ff]'}`}>
-                  <Maximize2 className="w-4 h-4" />
-                </div>
-                <div className="flex flex-col">
-                  <span className={`font-bold text-sm tracking-tight transition-colors duration-300 ${a4Config.showCropMarks ? 'text-[#0d99ff]' : 'text-slate-700'}`}>Show Crop Marks</span>
-                  <span className="text-[10px] text-slate-400 font-medium">Corner cutting ticks</span>
-                </div>
-              </div>
-              <div className={`relative z-10 w-5 h-5 rounded-md flex items-center justify-center border transition-all duration-300 ${a4Config.showCropMarks ? 'bg-[#0d99ff] border-[#0d99ff]' : 'bg-transparent border-slate-300 group-hover:border-[#0d99ff]/50'}`}>
-                <Check className={`w-3.5 h-3.5 text-white transition-transform duration-300 ${a4Config.showCropMarks ? 'scale-100 opacity-100' : 'scale-50 opacity-0'}`} strokeWidth={3} />
-              </div>
-            </label>
-
-            {/* Setting: Show Cut Outlines */}
-            <label className="group relative flex items-center justify-between p-3.5 rounded-2xl bg-white hover:bg-slate-50/60 border-2 border-slate-200/50 hover:border-[#0d99ff]/30 shadow-sm hover:shadow-md hover:shadow-[#0d99ff]/5 cursor-pointer transition-all duration-300 overflow-hidden">
-              <input type="checkbox" checked={a4Config.showCutLines} onChange={(e) => setA4Config((prev) => ({ ...prev, showCutLines: e.target.checked }))} className="sr-only peer" />
-              <div className="absolute inset-0 bg-[#0d99ff]/0 peer-checked:bg-[#0d99ff]/[0.04] transition-colors duration-300" />
-              <div className="relative z-10 flex items-center gap-3">
-                <div className={`p-2 rounded-xl transition-all duration-300 ${a4Config.showCutLines ? 'bg-[#0d99ff] text-white shadow-md shadow-[#0d99ff]/30' : 'bg-slate-100 text-slate-500 group-hover:bg-[#0d99ff]/10 group-hover:text-[#0d99ff]'}`}>
-                  <Scissors className="w-4 h-4" />
-                </div>
-                <div className="flex flex-col">
-                  <span className={`font-bold text-sm tracking-tight transition-colors duration-300 ${a4Config.showCutLines ? 'text-[#0d99ff]' : 'text-slate-700'}`}>Show Cut Outlines</span>
-                  <span className="text-[10px] text-slate-400 font-medium">Dashed bounding box</span>
-                </div>
-              </div>
-              <div className={`relative z-10 w-5 h-5 rounded-md flex items-center justify-center border transition-all duration-300 ${a4Config.showCutLines ? 'bg-[#0d99ff] border-[#0d99ff]' : 'bg-transparent border-slate-300 group-hover:border-[#0d99ff]/50'}`}>
-                <Check className={`w-3.5 h-3.5 text-white transition-transform duration-300 ${a4Config.showCutLines ? 'scale-100 opacity-100' : 'scale-50 opacity-0'}`} strokeWidth={3} />
-              </div>
-            </label>
-          </div>
-        </div>
-
-        {/* Section: Print & Export (Pinned at Bottom) */}
-        <div className="mt-auto space-y-2 pt-3 border-t border-slate-100">
+        {/* Print & export */}
+        <div className="p-4 space-y-2 border-t border-slate-100 dark:border-slate-800">
           <button
             type="button"
             onClick={() => printA4Sheet(a4Instances, a4Config, projectTitle)}
-            className="w-full flex items-center justify-center gap-2 py-3 bg-[#0d99ff] hover:bg-[#0c8ce9] text-white font-bold text-xs rounded-xl shadow-xs hover:shadow-md transition-all cursor-pointer"
+            className="w-full h-9 flex items-center justify-center gap-2 rounded-lg bg-[#0d99ff] hover:bg-[#0b87e0] active:scale-[0.98] text-white text-[12px] font-semibold shadow-[0_4px_12px_-4px_rgba(13,153,255,0.7)] transition-all cursor-pointer"
           >
-            <Printer className="w-4 h-4 text-white" />
-            <span>Print 1:1 A4 Sheet</span>
+            <Printer className="w-4 h-4" />
+            Print 1:1
           </button>
-
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
               onClick={() => downloadA4Svg(a4Instances, a4Config, `${projectTitle}_a4_sheet.svg`)}
-              className="flex items-center justify-center gap-1.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
+              className="h-8 flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-[12px] font-medium transition-colors cursor-pointer"
             >
-              <FileCode className="w-3.5 h-3.5 text-amber-500" />
-              <span>SVG Vector</span>
+              <FileCode className="w-3.5 h-3.5 text-slate-400" />
+              SVG
             </button>
             <button
               type="button"
               onClick={() => downloadA4Pdf(a4Instances, a4Config, `${projectTitle}_a4_sheet.pdf`)}
-              className="flex items-center justify-center gap-1.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
+              className="h-8 flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-[12px] font-medium transition-colors cursor-pointer"
             >
-              <FileText className="w-3.5 h-3.5 text-red-500" />
-              <span>1:1 PDF</span>
+              <FileText className="w-3.5 h-3.5 text-slate-400" />
+              PDF
             </button>
           </div>
         </div>
@@ -558,14 +608,15 @@ export const A4ProductionSheet: React.FC = () => {
 
       {/* --- 2. CENTER CANVAS: A4 SHEET SURFACE (AUTO-FITTED & FULLY VISIBLE) --- */}
       <div
-        className={`flex-1 overflow-hidden flex items-center justify-center p-6 relative bg-[#e2e8f0] ${
+        ref={sheetAreaRef}
+        className={`flex-1 overflow-hidden flex items-center justify-center p-6 relative bg-[#e2e8f0] dark:bg-[#0b0f19] ${
           isPanning ? 'cursor-grabbing' : isSpacePressed ? 'cursor-grab' : ''
         }`}
       >
         {/* Floating Mini Zoom Controls */}
         <div
           onClick={(e) => e.stopPropagation()}
-          className="absolute left-4 top-4 z-20 flex items-center gap-1 bg-white/95 backdrop-blur-md px-2 py-1 rounded-xl border border-slate-200/80 shadow-md text-xs"
+          className="absolute left-4 top-4 z-20 flex items-center gap-1 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md px-2 py-1 rounded-xl border border-slate-200/80 dark:border-slate-700 shadow-md text-xs"
         >
           <button
             type="button"
@@ -575,8 +626,8 @@ export const A4ProductionSheet: React.FC = () => {
             }}
             className={`px-2 py-1 rounded-lg font-bold transition-all cursor-pointer ${
               Math.abs(a4Zoom - 0.58) < 0.05 && panOffset.x === 0 && panOffset.y === 0
-                ? 'bg-blue-50 text-[#0d99ff]'
-                : 'text-slate-600 hover:bg-slate-100'
+                ? 'bg-blue-50 dark:bg-blue-950/40 text-[#0d99ff]'
+                : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
             title="Fit Entire A4 Page on Screen"
           >
@@ -586,27 +637,27 @@ export const A4ProductionSheet: React.FC = () => {
             type="button"
             onClick={() => setA4Zoom(1.0)}
             className={`px-2 py-1 rounded-lg font-bold transition-all cursor-pointer ${
-              Math.abs(a4Zoom - 1.0) < 0.05 ? 'bg-blue-50 text-[#0d99ff]' : 'text-slate-600 hover:bg-slate-100'
+              Math.abs(a4Zoom - 1.0) < 0.05 ? 'bg-blue-50 dark:bg-blue-950/40 text-[#0d99ff]' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
             title="100% Actual Physical Print Scale"
           >
             100%
           </button>
-          <div className="h-4 w-px bg-slate-200 mx-0.5" />
+          <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-0.5" />
           <button
             type="button"
             onClick={() => setA4Zoom((z) => Math.max(0.3, Number((z - 0.1).toFixed(2))))}
-            className="w-6 h-6 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 font-bold cursor-pointer"
+            className="w-6 h-6 rounded-lg flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 font-bold cursor-pointer"
           >
             <ZoomOut className="w-3.5 h-3.5" />
           </button>
-          <span className="font-mono text-[11px] font-bold text-slate-500 w-10 text-center select-none">
+          <span className="font-mono text-[11px] font-bold text-slate-500 dark:text-slate-400 w-10 text-center select-none">
             {Math.round(a4Zoom * 100)}%
           </span>
           <button
             type="button"
             onClick={() => setA4Zoom((z) => Math.min(2.0, Number((z + 0.1).toFixed(2))))}
-            className="w-6 h-6 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 font-bold cursor-pointer"
+            className="w-6 h-6 rounded-lg flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 font-bold cursor-pointer"
           >
             <ZoomIn className="w-3.5 h-3.5" />
           </button>
@@ -626,8 +677,10 @@ export const A4ProductionSheet: React.FC = () => {
               style={{
                 width: `${pageW * 3.7795}px`,
                 height: `${pageH * 3.7795}px`,
-                backgroundColor: a4Config.laserInvert ? '#000000' : '#ffffff',
-                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.05)',
+                backgroundColor: screenInvert ? '#000000' : darkPaper ? '#111827' : '#ffffff',
+                boxShadow: isDark
+                  ? '0 25px 50px -12px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.12)'
+                  : '0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.05)',
               }}
               className="relative transition-colors duration-200"
             >
@@ -636,7 +689,7 @@ export const A4ProductionSheet: React.FC = () => {
                 style={{
                   position: 'absolute',
                   inset: `${10 * 3.7795}px`,
-                  border: `1px dashed ${a4Config.laserInvert ? 'rgba(255,255,255,0.15)' : 'rgba(13,153,255,0.2)'}`,
+                  border: `1px dashed ${(screenInvert || darkPaper) ? 'rgba(255,255,255,0.15)' : 'rgba(13,153,255,0.2)'}`,
                   pointerEvents: 'none',
                 }}
               />
@@ -656,7 +709,7 @@ export const A4ProductionSheet: React.FC = () => {
                     fontFamily="sans-serif"
                     fontSize="2.4"
                     fontWeight="bold"
-                    fill={a4Config.laserInvert ? '#ffffff' : '#0f172a'}
+                    fill={(screenInvert || darkPaper) ? '#ffffff' : '#0f172a'}
                   >
                     STAMIOX A4 GANG-SHEET PRODUCTION
                   </text>
@@ -665,7 +718,7 @@ export const A4ProductionSheet: React.FC = () => {
                     y="3.2"
                     fontFamily="sans-serif"
                     fontSize="1.6"
-                    fill={a4Config.laserInvert ? '#888888' : '#64748b'}
+                    fill={(screenInvert || darkPaper) ? '#888888' : '#64748b'}
                   >
                     {a4Instances.length} {a4Instances.length === 1 ? 'stamp' : 'stamps'} arranged • 1:1 Scale
                   </text>
@@ -679,12 +732,12 @@ export const A4ProductionSheet: React.FC = () => {
                     width="50"
                     height="3"
                     fill="none"
-                    stroke={a4Config.laserInvert ? '#ffffff' : '#000000'}
+                    stroke={(screenInvert || darkPaper) ? '#ffffff' : '#000000'}
                     strokeWidth="0.3"
                   />
-                  <line x1="0" y1="0" x2="0" y2="3" stroke={a4Config.laserInvert ? '#ffffff' : '#000000'} strokeWidth="0.6" />
-                  <line x1="25" y1="0" x2="25" y2="3" stroke={a4Config.laserInvert ? '#ffffff' : '#000000'} strokeWidth="0.3" />
-                  <line x1="50" y1="0" x2="50" y2="3" stroke={a4Config.laserInvert ? '#ffffff' : '#000000'} strokeWidth="0.6" />
+                  <line x1="0" y1="0" x2="0" y2="3" stroke={(screenInvert || darkPaper) ? '#ffffff' : '#000000'} strokeWidth="0.6" />
+                  <line x1="25" y1="0" x2="25" y2="3" stroke={(screenInvert || darkPaper) ? '#ffffff' : '#000000'} strokeWidth="0.3" />
+                  <line x1="50" y1="0" x2="50" y2="3" stroke={(screenInvert || darkPaper) ? '#ffffff' : '#000000'} strokeWidth="0.6" />
                   <text
                     x="25"
                     y="-1.2"
@@ -692,7 +745,7 @@ export const A4ProductionSheet: React.FC = () => {
                     fontSize="1.6"
                     fontWeight="bold"
                     textAnchor="middle"
-                    fill={a4Config.laserInvert ? '#ffffff' : '#000000'}
+                    fill={(screenInvert || darkPaper) ? '#ffffff' : '#000000'}
                   >
                     1:1 CALIBRATION BAR (50 mm)
                   </text>
@@ -702,7 +755,7 @@ export const A4ProductionSheet: React.FC = () => {
                     fontFamily="monospace"
                     fontSize="1.3"
                     textAnchor="middle"
-                    fill={a4Config.laserInvert ? '#ffffff' : '#000000'}
+                    fill={(screenInvert || darkPaper) ? '#ffffff' : '#000000'}
                   >
                     0
                   </text>
@@ -712,7 +765,7 @@ export const A4ProductionSheet: React.FC = () => {
                     fontFamily="monospace"
                     fontSize="1.3"
                     textAnchor="middle"
-                    fill={a4Config.laserInvert ? '#ffffff' : '#000000'}
+                    fill={(screenInvert || darkPaper) ? '#ffffff' : '#000000'}
                   >
                     25
                   </text>
@@ -722,11 +775,49 @@ export const A4ProductionSheet: React.FC = () => {
                     fontFamily="monospace"
                     fontSize="1.3"
                     textAnchor="middle"
-                    fill={a4Config.laserInvert ? '#ffffff' : '#000000'}
+                    fill={(screenInvert || darkPaper) ? '#ffffff' : '#000000'}
                   >
                     50mm
                   </text>
                 </g>
+
+                {/* Empty State when no stamps have been placed */}
+                {a4Instances.length === 0 && (
+                  <g transform={`translate(${pageW / 2}, ${pageH / 2})`} pointerEvents="none">
+                    <rect
+                      x="-75"
+                      y="-22"
+                      width="150"
+                      height="44"
+                      rx="4"
+                      fill={(screenInvert || darkPaper) ? '#1e293b' : '#f8fafc'}
+                      stroke={(screenInvert || darkPaper) ? '#334155' : '#cbd5e1'}
+                      strokeWidth="0.4"
+                      strokeDasharray="2, 2"
+                    />
+                    <text
+                      x="0"
+                      y="-5"
+                      textAnchor="middle"
+                      fontFamily="sans-serif"
+                      fontSize="3.8"
+                      fontWeight="600"
+                      fill={(screenInvert || darkPaper) ? '#f1f5f9' : '#1e293b'}
+                    >
+                      A4 Sheet is Empty
+                    </text>
+                    <text
+                      x="0"
+                      y="3.5"
+                      textAnchor="middle"
+                      fontFamily="sans-serif"
+                      fontSize="2.2"
+                      fill={(screenInvert || darkPaper) ? '#94a3b8' : '#64748b'}
+                    >
+                      Click &ldquo;Add current stamp&rdquo; on the left to place your design
+                    </text>
+                  </g>
+                )}
 
                 {/* Placed Stamps Layer */}
                 {a4Instances.map((inst, index) => {
@@ -736,20 +827,25 @@ export const A4ProductionSheet: React.FC = () => {
                   const rawSvg = generateStampSvg({
                     widthMm: inst.widthMm,
                     heightMm: inst.heightMm,
-                    inkColor: a4Config.laserInvert ? '#ffffff' : inst.inkColor,
+                    inkColor: screenInvert ? '#ffffff' : darkPaper ? '#f1f5f9' : inst.inkColor,
                     elements: inst.elements,
                     shape: inst.shape,
-                    invert: a4Config.laserInvert,
+                    invert: screenInvert,
                     mirror: a4Config.laserMirror,
                     distressEffect: false,
                   });
 
-                  const contentMatch = rawSvg.match(/<g id="stamp-content"[\s\S]*?<\/g>/);
-                  const innerSvgContent = contentMatch ? contentMatch[0] : rawSvg;
+                  // Place the whole stamp SVG (sized in mm, with its own viewBox) so every nested group,
+                  // transform and mirror stays intact. Cutting out <g id="stamp-content">…</g> with a
+                  // regex stopped at the first nested </g> and spilled the rest outside the stamp.
+                  const innerSvgContent = rawSvg
+                    .replace(/width="[^"]*mm"/, `width="${inst.widthMm}"`)
+                    .replace(/height="[^"]*mm"/, `height="${inst.heightMm}" x="0" y="0" overflow="visible"`)
+                    .replace(/style="background-color: none;"/, '');
 
                   // Corner tick marks (Crop Marks)
                   const tickLen = 2.5;
-                  const guideStroke = a4Config.laserInvert ? '#4ade80' : '#0d99ff';
+                  const guideStroke = (screenInvert || darkPaper) ? '#4ade80' : '#0d99ff';
 
                   return (
                     <g
@@ -804,7 +900,7 @@ export const A4ProductionSheet: React.FC = () => {
                       )}
 
                       {/* Stamp SVG Content */}
-                      <g dangerouslySetInnerHTML={{ __html: innerSvgContent }} />
+                      <RawSvgGroup html={innerSvgContent} />
 
                       {/* Selection Bounding Highlight (Clean Figma style) */}
                       {isSelected && (
@@ -827,6 +923,32 @@ export const A4ProductionSheet: React.FC = () => {
                         </g>
                       )}
 
+                      {/* Quick remove (✕) on the hovered / selected stamp */}
+                      {(isSelected || isHovered) && (() => {
+                        const pxToMmHere = 1 / (3.7795 * a4Zoom); // keep it ~the same size on screen at any zoom
+                        const r = 9 * pxToMmHere;
+                        const arm = 3.2 * pxToMmHere;
+                        const cx = inst.widthMm;
+                        const cy = 0;
+                        return (
+                          <g
+                            role="button"
+                            aria-label="Remove stamp"
+                            className="cursor-pointer"
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteA4Instance(inst.instanceId);
+                            }}
+                          >
+                            <title>Remove from sheet (Delete)</title>
+                            <circle cx={cx} cy={cy} r={r} fill="#ef4444" stroke="#ffffff" strokeWidth={1.5 * pxToMmHere} />
+                            <line x1={cx - arm} y1={cy - arm} x2={cx + arm} y2={cy + arm} stroke="#ffffff" strokeWidth={1.6 * pxToMmHere} strokeLinecap="round" />
+                            <line x1={cx + arm} y1={cy - arm} x2={cx - arm} y2={cy + arm} stroke="#ffffff" strokeWidth={1.6 * pxToMmHere} strokeLinecap="round" />
+                          </g>
+                        );
+                      })()}
+
                       {/* Dimension Badge Label */}
                       <text
                         x={inst.widthMm / 2}
@@ -835,7 +957,7 @@ export const A4ProductionSheet: React.FC = () => {
                         fontSize="1.7"
                         fontWeight="bold"
                         textAnchor="middle"
-                        fill={isSelected ? '#0d99ff' : a4Config.laserInvert ? '#aaaaaa' : '#64748b'}
+                        fill={isSelected ? '#0d99ff' : (screenInvert || darkPaper) ? '#aaaaaa' : '#64748b'}
                         pointerEvents="none"
                       >
                         #{index + 1}: {Math.round(inst.widthMm)}×{Math.round(inst.heightMm)}mm
@@ -852,107 +974,114 @@ export const A4ProductionSheet: React.FC = () => {
         {selectedInstance && (
           <aside
             onClick={(e) => e.stopPropagation()}
-            className="w-72 bg-white/95 backdrop-blur-md border-l border-slate-200 flex flex-col p-4 shadow-xl z-20 overflow-y-auto animate-in slide-in-from-right-4 duration-200"
+            className="w-64 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 flex flex-col z-20 fx-panel"
           >
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div>
-                <span className="font-bold text-xs text-slate-900 block">Stamp Variant</span>
-                <span className="text-[10px] text-slate-400 font-mono">
+            {/* Header */}
+            <div className="flex items-center gap-2 px-4 pt-4 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="min-w-0 flex-1">
+                <h2 className="text-[13px] font-semibold text-slate-900 dark:text-white">Stamp</h2>
+                <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5 tabular-nums">
                   {selectedInstance.widthMm} × {selectedInstance.heightMm} mm
-                </span>
+                </p>
               </div>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => duplicateA4Instance(selectedInstance.instanceId)}
-                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[#0d99ff] transition-all"
-                  title="Duplicate this stamp variant"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => deleteA4Instance(selectedInstance.instanceId)}
-                  className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-600 transition-all"
-                  title="Delete stamp from A4 sheet"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => duplicateA4Instance(selectedInstance.instanceId)}
+                className="h-8 w-8 rounded-md flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                title="Duplicate"
+                aria-label="Duplicate"
+              >
+                <Copy className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => deleteA4Instance(selectedInstance.instanceId)}
+                className="h-8 w-8 rounded-md flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors cursor-pointer"
+                title="Remove from sheet"
+                aria-label="Remove from sheet"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
             </div>
 
-            {/* Primary Action: Edit in Single Stamp Studio */}
-            <button
-              type="button"
-              onClick={() => editA4InstanceInSingleEditor(selectedInstance.instanceId)}
-              className="w-full flex items-center justify-center gap-2 py-2.5 px-3 mt-3 bg-[#0d99ff] hover:bg-[#0c8ce9] text-white font-bold text-xs rounded-xl shadow-xs hover:shadow-md transition-all cursor-pointer group"
-              title="Open and edit this stamp with full vector tools in Single Stamp Studio"
-            >
-              <Edit3 className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
-              <span>Edit in Single Stamp Studio</span>
-            </button>
-
-            {/* Stamp Label / Variant Name */}
-            <div className="mt-3 space-y-1">
-              <label className="text-[11px] font-semibold text-slate-600">Label / Name</label>
-              <input
-                type="text"
-                value={selectedInstance.name}
-                onChange={(e) => updateA4Instance(selectedInstance.instanceId, { name: e.target.value })}
-                className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-[#0d99ff]"
-              />
-            </div>
-
-            {/* Position Coordinates on A4 Sheet */}
-            <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-500 block">X Pos</label>
-                <ModernStepper
-                  value={selectedInstance.xMm}
-                  step={1}
-                  unit="mm"
-                  onChange={(val) => updateA4Instance(selectedInstance.instanceId, { xMm: val })}
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
+              {/* Name */}
+              <section className="space-y-2">
+                <h3 className="text-[12px] font-semibold text-slate-800 dark:text-slate-100">Name</h3>
+                <input
+                  type="text"
+                  value={selectedInstance.name}
+                  onChange={(e) => updateA4Instance(selectedInstance.instanceId, { name: e.target.value })}
+                  className="w-full h-8 px-2.5 rounded-md bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-white dark:focus:bg-slate-800 ring-1 ring-transparent focus:ring-[#0d99ff] text-[12px] text-slate-800 dark:text-slate-100 outline-none transition-colors"
                 />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-500 block">Y Pos</label>
-                <ModernStepper
-                  value={selectedInstance.yMm}
-                  step={1}
-                  unit="mm"
-                  onChange={(val) => updateA4Instance(selectedInstance.instanceId, { yMm: val })}
-                />
-              </div>
-            </div>
+              </section>
 
-            {/* In-Place Quick Text Edits for this Specific Variant */}
-            <div className="mt-4 pt-3 border-t border-slate-100">
-              <span className="text-[11px] font-bold text-slate-700 block mb-2">
-                Quick Text Edits for this Copy
-              </span>
-              <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
-                {selectedInstance.elements
-                  .filter((el) => el.type === 'text' || el.type === 'arc-text')
-                  .map((el: any, elIdx) => (
-                    <div key={el.id || elIdx} className="space-y-1 bg-slate-50 p-2 rounded-xl border border-slate-200/60">
-                      <div className="flex items-center justify-between text-[10px] text-slate-500 font-semibold">
-                        <span>{el.type === 'arc-text' ? (el.isReversed ? 'Bottom Arc' : 'Top Arc') : 'Straight Text'}</span>
-                        <span className="font-mono">{el.fontSize}mm</span>
-                      </div>
-                      <input
-                        type="text"
-                        value={el.text || ''}
-                        onChange={(e) => {
-                          const updatedElements = selectedInstance.elements.map((x) =>
-                            x.id === el.id ? { ...x, text: e.target.value } : x
-                          );
-                          updateA4Instance(selectedInstance.instanceId, { elements: updatedElements });
-                        }}
-                        className="w-full px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-900 outline-none focus:border-[#0d99ff]"
-                      />
+              {/* Position on the sheet */}
+              <section className="space-y-2 pt-4 border-t border-slate-100 dark:border-slate-800">
+                <h3 className="text-[12px] font-semibold text-slate-800 dark:text-slate-100">Position on sheet</h3>
+                <div className="grid grid-cols-2 gap-2">
+                  <SheetNumberField
+                    label="X"
+                    value={selectedInstance.xMm}
+                    onChange={(v) => updateA4Instance(selectedInstance.instanceId, { xMm: v })}
+                  />
+                  <SheetNumberField
+                    label="Y"
+                    value={selectedInstance.yMm}
+                    onChange={(v) => updateA4Instance(selectedInstance.instanceId, { yMm: v })}
+                  />
+                </div>
+                <p className="text-[10.5px] text-slate-400 dark:text-slate-500">Drag on the sheet · ↑ ↓ to nudge</p>
+              </section>
+
+              {/* Text of this copy */}
+              {(() => {
+                const texts = selectedInstance.elements.filter((el) => el.type === 'text' || el.type === 'arc-text') as any[];
+                return (
+                  <section className="space-y-2.5 pt-4 border-t border-slate-100 dark:border-slate-800">
+                    <div className="flex items-baseline justify-between">
+                      <h3 className="text-[12px] font-semibold text-slate-800 dark:text-slate-100">Text</h3>
+                      <span className="text-[10.5px] text-slate-400 dark:text-slate-500">this copy only</span>
                     </div>
-                  ))}
-              </div>
+                    {texts.length === 0 ? (
+                      <p className="text-[11px] text-slate-400 dark:text-slate-500 py-2">This stamp has no text.</p>
+                    ) : (
+                      texts.map((el, i) => (
+                        <label key={el.id || i} className="block space-y-1">
+                          <span className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                            {el.type === 'arc-text' ? (el.isReversed ? 'Bottom curve' : 'Top curve') : 'Text'}
+                            <span className="tabular-nums text-slate-400 dark:text-slate-500">{el.fontSize} mm</span>
+                          </span>
+                          <input
+                            type="text"
+                            value={el.text || ''}
+                            onChange={(e) => {
+                              const updatedElements = selectedInstance.elements.map((x) =>
+                                x.id === el.id ? { ...x, text: e.target.value } : x
+                              );
+                              updateA4Instance(selectedInstance.instanceId, { elements: updatedElements });
+                            }}
+                            className="w-full h-8 px-2.5 rounded-md bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-white dark:focus:bg-slate-800 ring-1 ring-transparent focus:ring-[#0d99ff] text-[12px] text-slate-800 dark:text-slate-100 outline-none transition-colors"
+                          />
+                        </label>
+                      ))
+                    )}
+                  </section>
+                );
+              })()}
+            </div>
+
+            {/* Edit the full design */}
+            <div className="p-4 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => editA4InstanceInSingleEditor(selectedInstance.instanceId)}
+                className="w-full h-9 flex items-center justify-center gap-2 rounded-lg bg-[#0d99ff] hover:bg-[#0b87e0] active:scale-[0.98] text-white text-[12px] font-semibold shadow-[0_4px_12px_-4px_rgba(13,153,255,0.7)] transition-all cursor-pointer"
+                title="Open this stamp with all design tools"
+              >
+                <Edit3 className="w-4 h-4" />
+                Edit in Studio
+              </button>
             </div>
           </aside>
         )}

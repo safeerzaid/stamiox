@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useEditor } from '../../context/EditorContext';
 import { generateStampSvg } from '../../lib/svg-generator';
-import { MM_TO_PT, MM_TO_PX } from '../../lib/units';
+import { MM_TO_PX } from '../../lib/units';
 import { jsPDF } from 'jspdf';
 import {
   X,
@@ -12,17 +12,19 @@ import {
   FileText,
   Image as ImageIcon,
   Printer,
+  Copy,
   Check,
-  Contrast,
-  FlipHorizontal,
+  MessageCircle,
+  Camera,
 } from 'lucide-react';
 
 interface ExportModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onOpenARModal?: () => void;
 }
 
-export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => {
+export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, onOpenARModal }) => {
   const {
     widthMm,
     heightMm,
@@ -35,8 +37,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
 
   const [exportInvert, setExportInvert] = useState<boolean>(laserInvert);
   const [exportMirror, setExportMirror] = useState<boolean>(laserMirror);
-  const [isExporting, setIsExporting] = useState<boolean>(false);
-  const [exportedFormat, setExportedFormat] = useState<string | null>(null);
+  const [exportingKey, setExportingKey] = useState<string | null>(null);
+  const [selectedFormat, setSelectedFormat] = useState<string>('svg'); // SVG is default
+  const [copiedImage, setCopiedImage] = useState<boolean>(false);
 
   if (!isOpen) return null;
 
@@ -50,15 +53,45 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     distressEffect: false,
   });
 
+  // Helper: Generate high-resolution PNG Blob (300 DPI)
+  const generatePngBlob = async (): Promise<Blob | null> => {
+    return new Promise((resolve) => {
+      const canvas = document.createElement('canvas');
+      const scaleFactor = 4; // ~300 DPI high-res
+      canvas.width = widthMm * MM_TO_PX * scaleFactor;
+      canvas.height = heightMm * MM_TO_PX * scaleFactor;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return resolve(null);
+
+      const img = new Image();
+      const svgBlob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(svgBlob);
+
+      img.onload = () => {
+        if (exportInvert) {
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        canvas.toBlob((blob) => {
+          resolve(blob);
+        }, 'image/png');
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(null);
+      };
+
+      img.src = url;
+    });
+  };
+
   // 1. Direct 1:1 Physical Scale Print Sheet
   const handlePrint = () => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      alert('Please allow popups to open the print sheet');
-      return;
-    }
-
-    printWindow.document.write(`
+    setExportingKey('print');
+    const printHtml = `
       <!DOCTYPE html>
       <html>
         <head>
@@ -98,14 +131,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
             .stamp-container {
               display: flex;
               flex-direction: column;
-              align-items: center;
-              justify-content: center;
-              margin: 30px auto;
-              padding: 20px;
-              border: 1px dashed #ccc;
-              border-radius: 8px;
-              width: fit-content;
-              page-break-inside: avoid;
+              align-items: flex-start;
+              margin: 30px 0;
             }
             .stamp-svg-wrapper {
               width: ${widthMm}mm;
@@ -113,6 +140,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
               display: flex;
               align-items: center;
               justify-content: center;
+              box-sizing: border-box;
             }
             .stamp-svg-wrapper svg {
               width: 100%;
@@ -121,27 +149,31 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
             .ruler-calibration {
               margin-top: 40px;
               padding-top: 15px;
-              border-top: 1px solid #ddd;
+              border-top: 1px dashed #ccc;
               font-size: 11px;
               color: #555;
             }
             .ruler-bar {
               width: 50mm;
-              height: 8px;
+              height: 4mm;
+              background: repeating-linear-gradient(
+                to right,
+                #000,
+                #000 1mm,
+                #fff 1mm,
+                #fff 2mm
+              );
               border: 1px solid #000;
-              border-left: 2px solid #000;
-              border-right: 2px solid #000;
-              margin-top: 6px;
-              background: repeating-linear-gradient(to right, #000 0, #000 1px, transparent 1px, transparent 10mm);
+              margin-top: 5px;
             }
             .notice {
-              margin-top: 20px;
+              margin-top: 25px;
               font-size: 10px;
-              color: #888;
-              line-height: 1.5;
-            }
-            @media print {
-              .stamp-container { border: 1px dashed #bbb; }
+              color: #777;
+              background: #f8f8f8;
+              padding: 10px;
+              border-radius: 4px;
+              border-left: 3px solid #000;
             }
           </style>
         </head>
@@ -178,7 +210,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
           </div>
 
           <div class="notice">
-            * <strong>Print Scale Tip:</strong> In the browser print dialog, set <em>Scale</em> to <strong>100% / Actual Size</strong> (do not choose &quot;Fit to Page&quot;) for 100% millimeter physical fidelity.
+            * <strong>Print Scale Tip:</strong> In the browser print dialog, set <em>Scale</em> to <strong>100% / Actual Size</strong> for 100% millimeter physical fidelity.
           </div>
 
           <script>
@@ -190,15 +222,45 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
           </script>
         </body>
       </html>
-    `);
-    printWindow.document.close();
-    setExportedFormat('Print Sheet');
-    setTimeout(() => setExportedFormat(null), 2500);
+    `;
+
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(printHtml);
+      printWindow.document.close();
+      setTimeout(() => setExportingKey(null), 1000);
+    } else {
+      // Fallback: Invisible iframe to bypass popup blocker
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      document.body.appendChild(iframe);
+      const doc = iframe.contentWindow?.document;
+      if (doc) {
+        doc.open();
+        doc.write(printHtml);
+        doc.close();
+        setTimeout(() => {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+          setTimeout(() => {
+            document.body.removeChild(iframe);
+            setExportingKey(null);
+          }, 2000);
+        }, 500);
+      } else {
+        setExportingKey(null);
+      }
+    }
   };
 
   // 2. Download SVG Vector
   const handleExportSvg = () => {
-    setIsExporting(true);
+    setExportingKey('svg');
     const blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -208,14 +270,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    setIsExporting(false);
-    setExportedFormat('SVG');
-    setTimeout(() => setExportedFormat(null), 2500);
+    setTimeout(() => setExportingKey(null), 1000);
   };
 
   // 3. Download Vector PDF in mm
   const handleExportPdf = () => {
-    setIsExporting(true);
+    setExportingKey('pdf');
     try {
       const orientation = widthMm >= heightMm ? 'landscape' : 'portrait';
       const doc = new jsPDF({
@@ -245,227 +305,224 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
           doc.addImage(imgData, 'PNG', 0, 0, widthMm, heightMm);
           doc.save(`${projectTitle.replace(/\s+/g, '_')}_300dpi.pdf`);
           URL.revokeObjectURL(url);
-          setIsExporting(false);
-          setExportedFormat('PDF');
-          setTimeout(() => setExportedFormat(null), 2500);
+          setTimeout(() => setExportingKey(null), 1000);
         };
         img.src = url;
       }
     } catch (e) {
       console.error(e);
-      setIsExporting(false);
+      setExportingKey(null);
     }
   };
 
   // 4. Download High-Res PNG (300 DPI)
-  const handleExportPng = (dpi = 300) => {
-    setIsExporting(true);
-    const canvas = document.createElement('canvas');
-    const scaleFactor = dpi === 600 ? 8 : 4;
-    canvas.width = widthMm * MM_TO_PX * scaleFactor;
-    canvas.height = heightMm * MM_TO_PX * scaleFactor;
-    const ctx = canvas.getContext('2d');
+  const handleExportPng = async () => {
+    setExportingKey('png');
+    const blob = await generatePngBlob();
+    if (blob) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${projectTitle.replace(/\s+/g, '_')}_300dpi.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+    setTimeout(() => setExportingKey(null), 1000);
+  };
 
-    if (ctx) {
-      const img = new Image();
-      const svgBlob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
-      const url = URL.createObjectURL(svgBlob);
+  // 5. Copy 300 DPI PNG Image to Clipboard (Paste into WhatsApp Web, Word, Slack, etc.)
+  const handleCopyImage = async () => {
+    try {
+      const blob = await generatePngBlob();
+      if (!blob) throw new Error('Could not generate PNG blob');
 
-      img.onload = () => {
-        if (exportInvert) {
-          ctx.fillStyle = '#000000';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-        }
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const a = document.createElement('a');
-        a.href = canvas.toDataURL('image/png');
-        a.download = `${projectTitle.replace(/\s+/g, '_')}_${dpi}dpi.png`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        setIsExporting(false);
-        setExportedFormat(`PNG (${dpi} DPI)`);
-        setTimeout(() => setExportedFormat(null), 2500);
-      };
-      img.src = url;
+      if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'image/png': blob }),
+        ]);
+        setCopiedImage(true);
+        setTimeout(() => setCopiedImage(false), 2000);
+      } else {
+        handleExportPng();
+      }
+    } catch (err) {
+      console.error('Failed to copy image:', err);
+      handleExportPng();
     }
   };
 
+  // 6. WhatsApp Share
+  const handleShareWhatsApp = () => {
+    const text = encodeURIComponent(
+      `Stamp Design Proof: *${projectTitle}*\n` +
+      `Physical Size: ${widthMm} mm × ${heightMm} mm\n` +
+      `Ink Color: ${inkColor}\n` +
+      `Laser Mode: ${exportInvert ? 'Negative (Invert)' : 'Positive'}${exportMirror ? ' + Mirrored' : ''}\n\n` +
+      `Designed with Stamiox Rubber Stamp Studio`
+    );
+    window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
+  };
+
+  const formats = [
+    { key: 'svg', title: 'Vector SVG', hint: 'Laser engraving — Trotec, Epilog, Ruida, LightBurn', Icon: FileCode, run: handleExportSvg, cta: 'Download SVG', best: true },
+    { key: 'pdf', title: 'Vector PDF', hint: 'Exact 1:1 mm scale document for high-res printing', Icon: FileText, run: handleExportPdf, cta: 'Download PDF' },
+    { key: 'png', title: 'PNG Image', hint: '300 DPI high-res proof for digital use & preview', Icon: ImageIcon, run: handleExportPng, cta: 'Download PNG' },
+  ];
+  const chosen = formats.find((f) => f.key === selectedFormat) || formats[0];
+  const busy = exportingKey === chosen.key;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden text-slate-800 animate-in zoom-in-95 duration-150">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 dark:bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Export stamp"
+        className="fx-menu relative w-full max-w-sm bg-white dark:bg-slate-900 rounded-2xl shadow-2xl ring-1 ring-slate-200/90 dark:ring-slate-800 p-5 text-slate-800 dark:text-slate-100 flex flex-col"
+      >
         {/* Header */}
-        <div className="p-5 border-b border-slate-200 flex items-center justify-between bg-white">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-800">
-              <Download className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="font-semibold text-base text-slate-900">
-                Export & Print Stamp
-              </h3>
-              <p className="text-xs text-slate-500">
-                Direct 1:1 physical printing, laser engraving vectors (SVG, PDF, PNG)
-              </p>
-            </div>
+        <div className="flex items-start justify-between mb-3.5">
+          <div className="min-w-0">
+            <h3 className="text-[15px] font-bold text-slate-900 dark:text-white">Export & Share</h3>
+            <p className="text-xs text-slate-400 truncate mt-0.5">
+              {projectTitle} · <strong className="font-semibold text-slate-700 dark:text-slate-200">{widthMm} × {heightMm} mm</strong>
+            </p>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors"
+            className="w-7 h-7 -mr-1 -mt-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-colors cursor-pointer"
+            title="Close"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Modal Body */}
-        <div className="p-6 space-y-5">
-          {/* Laser Machine Output Options */}
-          <div className="space-y-2.5">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Laser Engraver / Production Mode
-            </h4>
+        {/* Format Selection List */}
+        <div className="space-y-1.5" role="radiogroup" aria-label="Export format">
+          {formats.map((f) => {
+            const active = f.key === chosen.key;
+            return (
+              <button
+                key={f.key}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => setSelectedFormat(f.key)}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors cursor-pointer ${
+                  active
+                    ? 'bg-[#e5f2ff] dark:bg-blue-950/50 ring-1 ring-[#0d99ff]/50'
+                    : 'hover:bg-slate-50 dark:hover:bg-slate-800/70 ring-1 ring-transparent'
+                }`}
+              >
+                <span className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center shrink-0 ${active ? 'border-[#0d99ff]' : 'border-slate-300 dark:border-slate-600'}`}>
+                  {active && <span className="w-1.5 h-1.5 rounded-full bg-[#0d99ff]" />}
+                </span>
+                <f.Icon className={`w-4 h-4 shrink-0 ${active ? 'text-[#0d99ff]' : 'text-slate-400'}`} />
+                <span className="flex-1 min-w-0 leading-tight">
+                  <span className="flex items-center gap-1.5">
+                    <span className={`text-[12px] font-medium ${active ? 'text-slate-900 dark:text-white' : 'text-slate-700 dark:text-slate-200'}`}>{f.title}</span>
+                    {f.best && <span className="px-1.5 py-px rounded text-[9px] font-semibold bg-[#0d99ff] text-white">Laser</span>}
+                  </span>
+                  <span className="block text-[11px] text-slate-400 truncate mt-0.5">{f.hint}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-              {/* Laser Negative Mode */}
-              <label className="flex items-center justify-between p-3 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100/80 transition-colors">
-                <div className="flex items-center gap-2.5">
-                  <Contrast className="w-4 h-4 text-slate-600" />
-                  <div>
-                    <p className="font-semibold text-slate-900">Laser Invert (Negative)</p>
-                    <p className="text-[10px] text-slate-500">White relief on black background</p>
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={exportInvert}
-                  onChange={(e) => setExportInvert(e.target.checked)}
-                  className="w-4 h-4 accent-slate-900 rounded cursor-pointer"
-                />
-              </label>
+        {/* Laser Invert / Mirror Options */}
+        <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+          <span className="text-[11px] font-medium text-slate-400">Laser:</span>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] text-slate-600 dark:text-slate-300 font-medium">
+              <input
+                type="checkbox"
+                checked={exportInvert}
+                onChange={(e) => setExportInvert(e.target.checked)}
+                className="rounded text-[#0d99ff] cursor-pointer"
+              />
+              <span>Negative</span>
+            </label>
+            <label className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] text-slate-600 dark:text-slate-300 font-medium">
+              <input
+                type="checkbox"
+                checked={exportMirror}
+                onChange={(e) => setExportMirror(e.target.checked)}
+                className="rounded text-[#0d99ff] cursor-pointer"
+              />
+              <span>Mirror</span>
+            </label>
+          </div>
+        </div>
 
-              {/* Laser Mirror Mode */}
-              <label className="flex items-center justify-between p-3 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100/80 transition-colors">
-                <div className="flex items-center gap-2.5">
-                  <FlipHorizontal className="w-4 h-4 text-slate-600" />
-                  <div>
-                    <p className="font-semibold text-slate-900">Mirror Horizontal (Flip)</p>
-                    <p className="text-[10px] text-slate-500">Required for rubber stamp plate</p>
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={exportMirror}
-                  onChange={(e) => setExportMirror(e.target.checked)}
-                  className="w-4 h-4 accent-slate-900 rounded cursor-pointer"
-                />
-              </label>
-            </div>
+        {/* Primary Download Button */}
+        <button
+          type="button"
+          onClick={chosen.run}
+          disabled={busy}
+          className="mt-3.5 w-full h-10 rounded-xl bg-[#0d99ff] hover:bg-[#0b87e0] active:scale-[0.99] disabled:opacity-70 text-white text-[13px] font-semibold flex items-center justify-center gap-2 shadow-[0_6px_16px_-4px_rgba(13,153,255,0.7)] transition-all cursor-pointer"
+        >
+          <Download className="w-4 h-4" />
+          <span>{busy ? 'Preparing…' : chosen.cta}</span>
+        </button>
+
+        {/* Direct Print & Quick Share Actions */}
+        <div className="mt-3.5 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2">
+          {/* Direct Print 1:1 Button */}
+          <button
+            type="button"
+            onClick={handlePrint}
+            disabled={exportingKey === 'print'}
+            className="w-full h-9 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-[#0d99ff] hover:bg-[#f0f8ff] dark:hover:bg-blue-950/30 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+          >
+            <Printer className="w-3.5 h-3.5 text-[#0d99ff]" />
+            <span>{exportingKey === 'print' ? 'Opening Print…' : 'Direct Print (1:1 Scale)'}</span>
+          </button>
+
+          {/* Quick Share Row: Copy Image & WhatsApp */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={handleCopyImage}
+              className={`h-9 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                copiedImage
+                  ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400'
+                  : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
+              }`}
+              title="Copy 300 DPI stamp image to clipboard (Paste in WhatsApp Web, Word, Slack)"
+            >
+              {copiedImage ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5 text-slate-400" />}
+              <span>{copiedImage ? 'Copied Image!' : 'Copy Image'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleShareWhatsApp}
+              className="h-9 px-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-emerald-500/60 hover:bg-emerald-50/40 dark:hover:bg-emerald-950/30 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              title="Share stamp proof with client via WhatsApp"
+            >
+              <MessageCircle className="w-3.5 h-3.5 text-emerald-500" />
+              <span>WhatsApp</span>
+            </button>
           </div>
 
-          {/* Export & Print Formats Grid */}
-          <div className="space-y-2.5">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Choose Export or Print Method
-            </h4>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {/* Option 1: Direct 1:1 Print */}
-              <div
-                onClick={handlePrint}
-                className="p-3.5 rounded-2xl border border-slate-200 hover:border-slate-400 hover:bg-slate-50 cursor-pointer transition-all flex flex-col justify-between group shadow-2xs bg-white text-left"
-              >
-                <div>
-                  <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-800 flex items-center justify-center mb-2.5 group-hover:scale-105 transition-transform">
-                    <Printer className="w-4 h-4" />
-                  </div>
-                  <h5 className="font-semibold text-xs text-slate-900">1:1 Print Sheet</h5>
-                  <p className="text-[10px] text-slate-500 mt-1 line-clamp-2">
-                    Direct print with ruler calibration on A4 paper.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="mt-3 w-full py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 shadow-2xs transition-colors"
-                >
-                  Print Now
-                </button>
-              </div>
-
-              {/* Option 2: SVG Vector */}
-              <div
-                onClick={handleExportSvg}
-                className="p-3.5 rounded-2xl border border-slate-200 hover:border-slate-400 hover:bg-slate-50 cursor-pointer transition-all flex flex-col justify-between group shadow-2xs bg-white text-left"
-              >
-                <div>
-                  <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-800 flex items-center justify-center mb-2.5 group-hover:scale-105 transition-transform">
-                    <FileCode className="w-4 h-4" />
-                  </div>
-                  <h5 className="font-semibold text-xs text-slate-900">Vector SVG</h5>
-                  <p className="text-[10px] text-slate-500 mt-1 line-clamp-2">
-                    Direct laser cutting curves (Trotec, Epilog, Ruida).
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="mt-3 w-full py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 shadow-2xs transition-colors"
-                >
-                  Download SVG
-                </button>
-              </div>
-
-              {/* Option 3: Vector PDF */}
-              <div
-                onClick={handleExportPdf}
-                className="p-3.5 rounded-2xl border border-slate-200 hover:border-slate-400 hover:bg-slate-50 cursor-pointer transition-all flex flex-col justify-between group shadow-2xs bg-white text-left"
-              >
-                <div>
-                  <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-800 flex items-center justify-center mb-2.5 group-hover:scale-105 transition-transform">
-                    <FileText className="w-4 h-4" />
-                  </div>
-                  <h5 className="font-semibold text-xs text-slate-900">Vector PDF</h5>
-                  <p className="text-[10px] text-slate-500 mt-1 line-clamp-2">
-                    Exact millimeter physical scale document.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="mt-3 w-full py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 shadow-2xs transition-colors"
-                >
-                  Download PDF
-                </button>
-              </div>
-
-              {/* Option 4: High-Res PNG */}
-              <div
-                onClick={() => handleExportPng(300)}
-                className="p-3.5 rounded-2xl border border-slate-200 hover:border-slate-400 hover:bg-slate-50 cursor-pointer transition-all flex flex-col justify-between group shadow-2xs bg-white text-left"
-              >
-                <div>
-                  <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-800 flex items-center justify-center mb-2.5 group-hover:scale-105 transition-transform">
-                    <ImageIcon className="w-4 h-4" />
-                  </div>
-                  <h5 className="font-semibold text-xs text-slate-900">300 DPI PNG</h5>
-                  <p className="text-[10px] text-slate-500 mt-1 line-clamp-2">
-                    High-res graphic for digital stamping & proofs.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="mt-3 w-full py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 shadow-2xs transition-colors"
-                >
-                  Download PNG
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Success Toast */}
-          {exportedFormat && (
-            <div className="p-3 rounded-xl bg-slate-900 text-white text-xs font-semibold flex items-center justify-center gap-2 animate-in fade-in">
-              <Check className="w-4 h-4 text-emerald-400" />
-              <span>{exportedFormat === 'Print Sheet' ? 'Print dialog opened' : `Successfully exported ${exportedFormat}!`}</span>
-            </div>
+          {/* Real-World AR Preview Launch */}
+          {onOpenARModal && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenARModal();
+              }}
+              className="w-full h-8.5 rounded-xl border border-blue-200/80 dark:border-blue-900/60 bg-blue-50/60 dark:bg-blue-950/40 hover:bg-blue-100/70 text-[#0d99ff] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Camera className="w-3.5 h-3.5" />
+              <span>Real-World AR Camera Preview</span>
+            </button>
           )}
         </div>
       </div>
