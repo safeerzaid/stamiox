@@ -1,3 +1,4 @@
+import { PrismaClient } from '@prisma/client';
 import { STAMP_TEMPLATES, StampTemplateSeed } from '../data/templates';
 import { CLIPARTS, ClipartSeed } from '../data/cliparts';
 import bcrypt from 'bcryptjs';
@@ -45,137 +46,157 @@ export interface StampProjectEntity {
   updatedAt: Date;
 }
 
-// In-Memory Database Store (with persistent seed data)
+const DAY_MS = 24 * 60 * 60 * 1000;
+const TRIAL_DAYS = 90; // 3 months free trial
+const DEMO_USER_ID = 'user-demo-stamiox-001';
+const SHAPES = ['ROUND', 'RECTANGULAR', 'OVAL', 'SQUARE', 'CUSTOM'];
+// Project fields a client is allowed to set
+const PROJECT_FIELDS = [
+  'title', 'description', 'category', 'shape', 'widthMm', 'heightMm',
+  'inkColor', 'elementsJson', 'thumbnailSvg', 'isTemplate', 'isPublic',
+];
+
+const prisma = new PrismaClient();
+
+// Prisma returns null for empty optional columns; the API used to send undefined.
+const toUser = (u: any): UserEntity => ({ ...u, company: u.company ?? undefined });
+const toProject = (p: any): StampProjectEntity => ({
+  ...p,
+  description: p.description ?? undefined,
+  thumbnailSvg: p.thumbnailSvg ?? undefined,
+});
+
+// Keeps only known project fields, with safe types, so stray request fields never reach the DB.
+const projectData = (input: Record<string, any>): Record<string, any> => {
+  const data: Record<string, any> = {};
+  for (const key of PROJECT_FIELDS) {
+    let value = input[key];
+    if (value === undefined) continue;
+    if (key === 'shape') {
+      const s = String(value).toUpperCase();
+      value = SHAPES.includes(s) ? s : 'ROUND';
+    }
+    if (key === 'widthMm' || key === 'heightMm') value = Number(value) || 40;
+    if (key === 'isTemplate' || key === 'isPublic') value = Boolean(value);
+    if (key === 'elementsJson' && value === null) value = [];
+    data[key] = value;
+  }
+  return data;
+};
+
+const newTrial = (now: Date) => {
+  const trialEnd = new Date(now.getTime() + TRIAL_DAYS * DAY_MS);
+  return {
+    plan: 'FREE_TRIAL' as const,
+    status: 'TRIALING' as const,
+    trialStartDate: now,
+    trialEndDate: trialEnd,
+    currentPeriodStart: now,
+    currentPeriodEnd: trialEnd,
+    cancelAtPeriodEnd: false,
+  };
+};
+
+// Users, subscriptions and projects are stored in PostgreSQL (Prisma).
+// Templates and cliparts are fixed data shipped with the code, so they stay in memory.
 class DatabaseService {
-  private users: Map<string, UserEntity> = new Map();
-  private subscriptions: Map<string, SubscriptionEntity> = new Map();
-  private projects: Map<string, StampProjectEntity> = new Map();
   private templates: Map<string, StampTemplateSeed> = new Map();
   private cliparts: Map<string, ClipartSeed> = new Map();
 
   constructor() {
-    this.initSeedData();
+    STAMP_TEMPLATES.forEach((t) => this.templates.set(t.id, t));
+    CLIPARTS.forEach((c) => this.cliparts.set(c.id, c));
   }
 
-  private initSeedData() {
-    // Populate templates
-    STAMP_TEMPLATES.forEach((t) => this.templates.set(t.id, t));
-    // Populate cliparts
-    CLIPARTS.forEach((c) => this.cliparts.set(c.id, c));
-
-    // Create default Demo User
-    const demoId = 'user-demo-stamiox-001';
+  // Connects to the DB and makes sure the demo account exists with a running trial.
+  async init(): Promise<void> {
+    await prisma.$connect();
     const now = new Date();
-    const trialEnd = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000); // 90 days = 3 months
-    const passwordHash = bcrypt.hashSync('password123', 10);
 
-    const demoUser: UserEntity = {
-      id: demoId,
-      email: 'demo@stamiox.com',
-      passwordHash,
-      name: 'Alex Mercer (Demo)',
-      company: 'Mercer Rubber Stamps & Engraving',
-      role: 'USER',
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.users.set(demoId, demoUser);
+    const existing = await prisma.user.findUnique({ where: { id: DEMO_USER_ID } });
+    if (!existing) {
+      const demoTemplate = STAMP_TEMPLATES[0];
+      await prisma.user.create({
+        data: {
+          id: DEMO_USER_ID,
+          email: 'demo@stamiox.com',
+          passwordHash: bcrypt.hashSync('password123', 10),
+          name: 'Alex Mercer (Demo)',
+          company: 'Mercer Rubber Stamps & Engraving',
+          role: 'USER',
+          subscription: { create: { id: 'sub-demo-stamiox-001', ...newTrial(now) } },
+          projects: {
+            create: {
+              id: 'project-demo-01',
+              title: 'Official Company Round Seal 40mm',
+              description: 'Official seal design for Stamiox Global Enterprises',
+              category: 'company',
+              shape: 'ROUND',
+              widthMm: demoTemplate.widthMm,
+              heightMm: demoTemplate.heightMm,
+              inkColor: demoTemplate.defaultData.inkColor,
+              elementsJson: demoTemplate.defaultData.elements as any,
+              isTemplate: false,
+              isPublic: true,
+            },
+          },
+        },
+      });
+      return;
+    }
 
-    const demoSubscription: SubscriptionEntity = {
-      id: 'sub-demo-stamiox-001',
-      userId: demoId,
-      plan: 'FREE_TRIAL',
-      status: 'TRIALING',
-      trialStartDate: now,
-      trialEndDate: trialEnd,
-      currentPeriodStart: now,
-      currentPeriodEnd: trialEnd,
-      cancelAtPeriodEnd: false,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.subscriptions.set(demoId, demoSubscription);
-
-    // Initial demo project for the user
-    const demoTemplate = STAMP_TEMPLATES[0];
-    this.projects.set('project-demo-01', {
-      id: 'project-demo-01',
-      userId: demoId,
-      title: 'Official Company Round Seal 40mm',
-      description: 'Official seal design for Stamiox Global Enterprises',
-      category: 'company',
-      shape: 'ROUND',
-      widthMm: demoTemplate.widthMm,
-      heightMm: demoTemplate.heightMm,
-      inkColor: demoTemplate.defaultData.inkColor,
-      elementsJson: demoTemplate.defaultData.elements,
-      isTemplate: false,
-      isPublic: true,
-      createdAt: now,
-      updatedAt: now,
-    });
+    // The demo account is shared; restart its trial once it runs out.
+    const sub = await prisma.subscription.findUnique({ where: { userId: DEMO_USER_ID } });
+    if (!sub || sub.trialEndDate < now) {
+      await prisma.subscription.upsert({
+        where: { userId: DEMO_USER_ID },
+        create: { userId: DEMO_USER_ID, ...newTrial(now) },
+        update: newTrial(now),
+      });
+    }
   }
 
   // --- Users ---
   async findUserByEmail(email: string): Promise<UserEntity | null> {
-    for (const user of this.users.values()) {
-      if (user.email.toLowerCase() === email.toLowerCase()) {
-        return user;
-      }
-    }
-    return null;
+    const user = await prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
+    });
+    return user ? toUser(user) : null;
   }
 
   async findUserById(id: string): Promise<UserEntity | null> {
-    return this.users.get(id) || null;
+    const user = await prisma.user.findUnique({ where: { id } });
+    return user ? toUser(user) : null;
   }
 
   async createUser(data: { email: string; passwordHash: string; name: string; company?: string }): Promise<UserEntity> {
-    const id = 'user_' + Math.random().toString(36).substring(2, 11);
-    const now = new Date();
-    const newUser: UserEntity = {
-      id,
-      email: data.email,
-      passwordHash: data.passwordHash,
-      name: data.name,
-      company: data.company,
-      role: 'USER',
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.users.set(id, newUser);
-
-    // Automatically create 3-Month Free Trial Subscription (90 days)
-    const trialEnd = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
-    const subscription: SubscriptionEntity = {
-      id: 'sub_' + Math.random().toString(36).substring(2, 11),
-      userId: id,
-      plan: 'FREE_TRIAL',
-      status: 'TRIALING',
-      trialStartDate: now,
-      trialEndDate: trialEnd,
-      currentPeriodStart: now,
-      currentPeriodEnd: trialEnd,
-      cancelAtPeriodEnd: false,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.subscriptions.set(id, subscription);
-
-    return newUser;
+    // Every new user gets the 3-month free trial.
+    const user = await prisma.user.create({
+      data: {
+        email: data.email,
+        passwordHash: data.passwordHash,
+        name: data.name,
+        company: data.company,
+        role: 'USER',
+        subscription: { create: newTrial(new Date()) },
+      },
+    });
+    return toUser(user);
   }
 
   // --- Subscriptions ---
   async getSubscriptionByUserId(userId: string): Promise<SubscriptionEntity | null> {
-    return this.subscriptions.get(userId) || null;
+    return prisma.subscription.findUnique({ where: { userId } });
   }
 
   async updateSubscription(userId: string, update: Partial<SubscriptionEntity>): Promise<SubscriptionEntity | null> {
-    const sub = this.subscriptions.get(userId);
-    if (!sub) return null;
-    const updated = { ...sub, ...update, updatedAt: new Date() };
-    this.subscriptions.set(userId, updated);
-    return updated;
+    const { id: _id, userId: _userId, createdAt: _c, updatedAt: _u, ...data } = update;
+    try {
+      return await prisma.subscription.update({ where: { userId }, data });
+    } catch (e: any) {
+      if (e?.code === 'P2025') return null; // user has no subscription
+      throw e;
+    }
   }
 
   // --- Stamp Templates ---
@@ -200,40 +221,43 @@ class DatabaseService {
 
   // --- Stamp Projects ---
   async getProjectsByUserId(userId: string): Promise<StampProjectEntity[]> {
-    return Array.from(this.projects.values())
-      .filter((p) => p.userId === userId)
-      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    const rows = await prisma.stampProject.findMany({
+      where: { userId },
+      orderBy: { updatedAt: 'desc' },
+    });
+    return rows.map(toProject);
   }
 
   async getProjectById(id: string): Promise<StampProjectEntity | null> {
-    return this.projects.get(id) || null;
+    const p = await prisma.stampProject.findUnique({ where: { id } });
+    return p ? toProject(p) : null;
   }
 
   async createProject(data: Omit<StampProjectEntity, 'id' | 'createdAt' | 'updatedAt'>): Promise<StampProjectEntity> {
-    const id = 'proj_' + Math.random().toString(36).substring(2, 11);
-    const now = new Date();
-    const newProject: StampProjectEntity = {
-      ...data,
-      id,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.projects.set(id, newProject);
-    return newProject;
+    const p = await prisma.stampProject.create({
+      data: {
+        ...projectData(data),
+        title: data.title,
+        userId: data.userId,
+        elementsJson: data.elementsJson ?? [],
+      } as any,
+    });
+    return toProject(p);
   }
 
   async updateProject(id: string, update: Partial<StampProjectEntity>): Promise<StampProjectEntity | null> {
-    const proj = this.projects.get(id);
-    if (!proj) return null;
-    const updated = { ...proj, ...update, updatedAt: new Date() };
-    this.projects.set(id, updated);
-    return updated;
+    try {
+      const p = await prisma.stampProject.update({ where: { id }, data: projectData(update) });
+      return toProject(p);
+    } catch (e: any) {
+      if (e?.code === 'P2025') return null;
+      throw e;
+    }
   }
 
   async deleteProject(id: string, userId: string): Promise<boolean> {
-    const proj = this.projects.get(id);
-    if (!proj || proj.userId !== userId) return false;
-    return this.projects.delete(id);
+    const result = await prisma.stampProject.deleteMany({ where: { id, userId } });
+    return result.count > 0;
   }
 
   // --- Cliparts ---

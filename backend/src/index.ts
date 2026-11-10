@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { config } from './config';
 import apiRoutes from './routes';
+import { db } from './services/db.service';
 
 const app = express();
 
@@ -36,11 +37,18 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   });
 });
 
-// Start Server
-app.listen(config.port, () => {
-  console.log(`=============================================`);
-  console.log(`🚀 Stamiox Backend Server running on port ${config.port}`);
-  console.log(`🌐 Health check: http://localhost:${config.port}/health`);
-  console.log(`🎯 Free Trial: 90 Days (3 Months) Enabled`);
-  console.log(`=============================================`);
-});
+// Start Server (after the database is ready)
+db.init()
+  .then(() => {
+    app.listen(config.port, () => {
+      console.log(`=============================================`);
+      console.log(`🚀 Stamiox Backend Server running on port ${config.port}`);
+      console.log(`🌐 Health check: http://localhost:${config.port}/health`);
+      console.log(`🎯 Free Trial: 90 Days (3 Months) Enabled`);
+      console.log(`=============================================`);
+    });
+  })
+  .catch((err) => {
+    console.error('Failed to connect to the database:', err);
+    process.exit(1);
+  });
