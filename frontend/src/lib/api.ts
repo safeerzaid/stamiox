@@ -62,6 +62,22 @@ export class ApiService {
     });
   }
 
+  /** Register with mobile number + username + password */
+  static async registerAccount(data: { mobile: string; username: string; password: string; countryCode?: string }) {
+    return this.request<{ success: boolean; token: string; user: any; subscription: any }>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  /** Log in with a mobile number or username + password */
+  static async loginAccount(data: { identifier: string; password: string }) {
+    return this.request<{ success: boolean; token: string; user: any; subscription: any }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   static async demoLogin() {
     return this.request<{ success: boolean; token: string; user: any; subscription: any }>('/auth/demo-login', {
       method: 'POST',

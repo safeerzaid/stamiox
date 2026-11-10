@@ -12,6 +12,7 @@ import {
 } from '../controllers/project.controller';
 import { getCliparts } from '../controllers/clipart.controller';
 import { exportStampPdf, sanitizeAndValidateSvg } from '../controllers/export.controller';
+import { submitSupportTicket, getSupportTickets } from '../controllers/support.controller';
 import { authenticateToken, optionalAuth } from '../middleware/auth.middleware';
 import aiRoutes from './ai.routes';
 
@@ -45,6 +46,10 @@ router.get('/cliparts', getCliparts);
 // --- Export & Laser Utilities ---
 router.post('/export/pdf', exportStampPdf);
 router.post('/export/validate', sanitizeAndValidateSvg);
+
+// --- Support, Requirements & Suggestions ---
+router.post('/support', submitSupportTicket);
+router.get('/support', getSupportTickets);
 
 // --- AI Stamp Generator & Copilot ---
 router.use('/ai', aiRoutes);

@@ -20,6 +20,7 @@ export interface BaseElement {
   visible?: boolean;
   opacity?: number;
   rotation?: number; // degrees
+  groupId?: string;
 }
 
 export interface ArcTextElement extends BaseElement {
@@ -119,7 +120,8 @@ export interface ClipartElement extends BaseElement {
 
 export interface ImageElement extends BaseElement {
   type: 'image';
-  src: string; // base64 or url
+  src: string; // base64 or url (original upload)
+  maskSrc?: string; // processed 1-bit silhouette (white-on-transparent PNG) rendered in ink colour
   x: number;
   y: number;
   width: number;
@@ -202,6 +204,8 @@ export interface UserProfile {
   id: string;
   email: string;
   name: string;
+  username?: string;
+  mobile?: string;
   company?: string;
   role: string;
 }

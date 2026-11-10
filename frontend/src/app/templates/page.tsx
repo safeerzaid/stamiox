@@ -3,7 +3,11 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { STAMP_TEMPLATES } from '../../../../backend/src/data/templates';
 import { StampTemplate } from '../../types/stamp';
+import { playOpenTransition, playPreviewTransition } from '../../lib/open-transition';
+import { generateStampSvg } from '../../lib/svg-generator';
+import { FEATURED_TEMPLATE_IDS as FEATURED_IDS, designScore } from '../../lib/template-ranking';
 import { TemplateCard } from '../../components/templates/TemplateCard';
+import { useFavouriteTemplates } from '../../lib/favourite-templates';
 import { QuickCustomizerModal } from '../../components/templates/QuickCustomizerModal';
 import { TemplateFullscreenModal } from '../../components/templates/TemplateFullscreenModal';
 import { useEditor } from '../../context/EditorContext';
@@ -19,11 +23,14 @@ import {
   Award,
   Sparkles,
   Layers,
+  Star,
 } from 'lucide-react';
+
 
 function TemplatesContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { favouriteIds, isFavourite, toggleFavourite } = useFavouriteTemplates();
   const { loadTemplate } = useEditor();
 
   const [templates] = useState<StampTemplate[]>(STAMP_TEMPLATES as any);
@@ -68,12 +75,14 @@ function TemplatesContent() {
 
   const categories = [
     { id: 'all', label: 'All Templates' },
-    { id: 'company', label: 'Corporate & Company Seals' },
-    { id: 'notary', label: 'Notary & Legal Seals' },
-    { id: 'medical', label: 'Medical & Doctor Stamps' },
-    { id: 'office', label: 'Banking, CA & Office Stamps' },
-    { id: 'address', label: 'Return Address & Logistics' },
-    { id: 'monogram', label: 'Academic & University Seals' },
+    { id: 'company', label: 'Company & Brand' },
+    { id: 'notary', label: 'Notary & Legal' },
+    { id: 'medical', label: 'Medical & Doctor' },
+    { id: 'office', label: 'Office & Banking' },
+    { id: 'engineering', label: 'Engineer & Architect' },
+    { id: 'monogram', label: 'Monogram & Wedding' },
+    { id: 'date', label: 'Date & Received' },
+    { id: 'address', label: 'Address & Shipping' },
   ];
 
   const shapes = ['all', 'ROUND', 'RECTANGULAR', 'OVAL', 'SQUARE'];
@@ -103,6 +112,7 @@ function TemplatesContent() {
   const filteredTemplates = templates.filter((t) => {
     const matchesCat =
       selectedCategory === 'all' ||
+      (selectedCategory === 'favourites' && isFavourite(t.id)) ||
       t.category.toLowerCase() === selectedCategory.toLowerCase();
     const matchesShape =
       selectedShape === 'all' ||
@@ -117,9 +127,31 @@ function TemplatesContent() {
     return matchesCat && matchesShape && matchesSearch;
   });
 
+  // Finished, eye-catching designs first; blank size templates last.
+  const sortedTemplates = [...filteredTemplates].sort((a, b) => designScore(b) - designScore(a));
+
+  const isDefaultView = selectedCategory === 'all' && selectedShape === 'all' && !searchQuery.trim();
+  const featuredTemplates = FEATURED_IDS.map((id) => templates.find((t) => t.id === id)).filter(Boolean) as StampTemplate[];
+  const gridTemplates = isDefaultView
+    ? sortedTemplates.filter((t) => !FEATURED_IDS.includes(t.id))
+    : sortedTemplates;
+
   const handlePreviewTemplate = (template: StampTemplate) => {
-    setPreviewTemplate(template);
-    setIsFullscreenPreviewOpen(true);
+    // the stamp lifts out of its card and glides to the centre, then the window unfolds
+    playPreviewTransition({
+      templateId: template.id,
+      svg: generateStampSvg({
+        widthMm: template.widthMm,
+        heightMm: template.heightMm,
+        inkColor: template.defaultData.inkColor || '#1e3a8a',
+        elements: template.defaultData.elements || [],
+        shape: template.shape,
+      }),
+      onOpen: () => {
+        setPreviewTemplate(template);
+        setIsFullscreenPreviewOpen(true);
+      },
+    });
   };
 
   const handleQuickCustomize = (template: StampTemplate) => {
@@ -128,24 +160,38 @@ function TemplatesContent() {
   };
 
   const handleOpenInStudio = (template: StampTemplate) => {
-    loadTemplate(template);
-    router.push('/editor');
+    // the preview zooms out of its card, then the editor opens
+    playOpenTransition({
+      templateId: template.id,
+      title: template.title,
+      svg: generateStampSvg({
+        widthMm: template.widthMm,
+        heightMm: template.heightMm,
+        inkColor: template.defaultData.inkColor || '#1e3a8a',
+        elements: template.defaultData.elements || [],
+        shape: template.shape,
+      }),
+      onOpen: () => {
+        loadTemplate(template);
+        router.push('/editor');
+      },
+    });
   };
 
   return (
-    <div className="flex-1 bg-slate-50/70 min-h-screen py-10 text-slate-900">
+    <div className="flex-1 bg-slate-50/70 dark:bg-[#0b0f19] min-h-screen py-10 text-slate-900 dark:text-slate-100">
       <div className="max-w-[1720px] mx-auto px-4 sm:px-6 lg:px-8 space-y-7">
         {/* Page Header */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-6 border-b border-slate-200">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-6 border-b border-slate-200 dark:border-slate-800">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 border border-slate-200 text-slate-800 text-xs font-semibold mb-2">
-              <Layers className="w-3.5 h-3.5 text-slate-700" />
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold mb-2">
+              <Layers className="w-3.5 h-3.5 text-slate-700 dark:text-slate-300" />
               <span>Production Vector Template Catalog</span>
             </div>
-            <h1 className="text-3xl sm:text-4xl font-normal tracking-[-0.035em] text-[#111827]">
+            <h1 className="text-3xl sm:text-4xl font-normal tracking-[-0.035em] text-[#111827] dark:text-white">
               Rubber Stamp Templates
             </h1>
-            <p className="text-slate-500 text-xs sm:text-sm mt-1">
+            <p className="text-slate-500 dark:text-slate-400 text-xs sm:text-sm mt-1">
               Select any pre-designed template for live fullscreen interactive preview or open in the Full Vector Studio.
             </p>
           </div>
@@ -157,14 +203,26 @@ function TemplatesContent() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search 35+ templates, notary, doctor, CA..."
-              className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-white border border-slate-200 text-slate-900 text-xs placeholder:text-slate-400 outline-none focus:border-slate-400 shadow-2xs transition-all font-medium"
+              placeholder={`Search ${templates.length} templates — notary, doctor, wedding…`}
+              className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 text-xs placeholder:text-slate-400 outline-none focus:border-[#0d99ff] dark:focus:border-[#0d99ff] shadow-2xs transition-all font-medium"
             />
           </div>
         </div>
 
         {/* Category Pills Bar */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+          <button
+            onClick={() => handleCategoryChange('favourites')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
+              selectedCategory === 'favourites'
+                ? 'bg-amber-500 text-white shadow-xs'
+                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-amber-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 shadow-2xs'
+            }`}
+          >
+            <Star className={`w-3.5 h-3.5 ${selectedCategory === 'favourites' ? 'fill-white' : 'text-amber-500 fill-amber-400'}`} />
+            <span>Favourites</span>
+            {favouriteIds.length > 0 && <span className="tabular-nums opacity-70">{favouriteIds.length}</span>}
+          </button>
           {categories.map((cat) => {
             const isSelected = selectedCategory === cat.id;
 
@@ -174,8 +232,8 @@ function TemplatesContent() {
                 onClick={() => handleCategoryChange(cat.id)}
                 className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
                   isSelected
-                    ? 'bg-slate-900 text-white shadow-xs'
-                    : 'bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 shadow-2xs'
+                    ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-xs'
+                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 shadow-2xs'
                 }`}
               >
                 <span>{cat.label}</span>
@@ -185,7 +243,7 @@ function TemplatesContent() {
         </div>
 
         {/* Shape Filter Pills */}
-        <div className="flex items-center justify-between text-xs text-slate-600 pt-1">
+        <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-300 pt-1">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-slate-400 text-[11px] uppercase tracking-wider">Mount Shape:</span>
             <div className="flex items-center gap-1.5">
@@ -195,8 +253,8 @@ function TemplatesContent() {
                   onClick={() => handleShapeChange(s)}
                   className={`px-2.5 py-1 rounded-lg font-semibold uppercase text-[10px] transition-all cursor-pointer ${
                     selectedShape === s
-                      ? 'bg-slate-900 text-white shadow-2xs font-bold'
-                      : 'text-slate-600 hover:text-slate-900 bg-white border border-slate-200'
+                      ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-2xs font-bold'
+                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800'
                   }`}
                 >
                   {s}
@@ -210,21 +268,63 @@ function TemplatesContent() {
           </span>
         </div>
 
+        {/* Featured designs — the most eye-catching seals, shown first */}
+        {isDefaultView && featuredTemplates.length > 0 && (
+          <section className="space-y-4">
+            <div className="flex items-end justify-between">
+              <div>
+                <h2 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-amber-500" />
+                  Featured designs
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">Ready-to-use seals our customers love — customize in seconds.</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-6">
+              {featuredTemplates.map((tpl) => (
+                <TemplateCard
+                  key={`featured-${tpl.id}`}
+                  template={tpl}
+                  isFavourite={isFavourite(tpl.id)}
+                  onToggleFavourite={(t) => toggleFavourite(t.id)}
+                  onPreview={handlePreviewTemplate}
+                  onQuickCustomize={handleQuickCustomize}
+                  onOpenInStudio={handleOpenInStudio}
+                />
+              ))}
+            </div>
+            <div className="pt-4 border-t border-slate-200">
+              <h2 className="text-lg font-semibold tracking-tight text-slate-900">All templates</h2>
+            </div>
+          </section>
+        )}
+
         {/* Template Cards Grid */}
         {filteredTemplates.length === 0 ? (
           <div className="py-20 text-center space-y-3 bg-white rounded-3xl border border-slate-200 shadow-2xs">
             <LayoutGrid className="w-10 h-10 text-slate-300 mx-auto" />
-            <h3 className="text-base font-bold text-slate-800">No matching templates found</h3>
-            <p className="text-xs text-slate-400">
-              Try adjusting your search query or shape filter.
-            </p>
+            {selectedCategory === 'favourites' && favouriteIds.length === 0 ? (
+              <>
+                <h3 className="text-base font-bold text-slate-800">No favourites yet</h3>
+                <p className="text-xs text-slate-400">Tap the ☆ on any template to keep it here for quick access.</p>
+              </>
+            ) : (
+              <>
+                <h3 className="text-base font-bold text-slate-800">No matching templates found</h3>
+                <p className="text-xs text-slate-400">
+                  Try adjusting your search query or shape filter.
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-6">
-            {filteredTemplates.map((tpl) => (
+            {gridTemplates.map((tpl) => (
               <TemplateCard
                 key={tpl.id}
                 template={tpl}
+                isFavourite={isFavourite(tpl.id)}
+                onToggleFavourite={(t) => toggleFavourite(t.id)}
                 onPreview={handlePreviewTemplate}
                 onQuickCustomize={handleQuickCustomize}
                 onOpenInStudio={handleOpenInStudio}

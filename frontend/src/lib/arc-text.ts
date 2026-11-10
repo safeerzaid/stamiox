@@ -458,7 +458,28 @@ export function generateDiamondChainPath(
 /**
  * Generates polygon points for serrated notary starburst seals or custom decorative border styles
  */
+// Decorative border paths are expensive (wreaths have hundreds of curves) but depend only on their
+// inputs, so cache them — dragging any layer must not rebuild a border that did not change.
+const serratedPathCache = new Map<string, string>();
+
 export function generateSerratedPath(
+  cx: number,
+  cy: number,
+  outerRadius: number,
+  innerRadius: number,
+  teeth = 48,
+  isWreath: boolean | string = false
+): string {
+  const key = `${cx}|${cy}|${outerRadius}|${innerRadius}|${teeth}|${isWreath}`;
+  const hit = serratedPathCache.get(key);
+  if (hit !== undefined) return hit;
+  const d = buildSerratedPath(cx, cy, outerRadius, innerRadius, teeth, isWreath);
+  if (serratedPathCache.size > 300) serratedPathCache.clear();
+  serratedPathCache.set(key, d);
+  return d;
+}
+
+function buildSerratedPath(
   cx: number,
   cy: number,
   outerRadius: number,

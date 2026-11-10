@@ -12,6 +12,10 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, name: string, company?: string) => Promise<void>;
   demoLogin: () => Promise<void>;
+  /** mobile number + username + password */
+  registerAccount: (mobile: string, username: string, password: string, countryCode?: string) => Promise<void>;
+  /** mobile number or username + password */
+  loginAccount: (identifier: string, password: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
 }
@@ -33,6 +37,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (res.success && res.user) {
           setUser(res.user);
           setSubscription(res.subscription);
+          try { localStorage.setItem('stamiox_has_account', '1'); } catch { /* ignore */ }
         }
       }
     } catch (err) {
@@ -80,6 +85,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const applySession = (res: { success: boolean; token: string; user: any; subscription: any }) => {
+    if (res.success && res.token) {
+      ApiService.setToken(res.token);
+      try { localStorage.setItem('stamiox_has_account', '1'); } catch { /* ignore */ }
+      setToken(res.token);
+      setUser(res.user);
+      setSubscription(res.subscription);
+    }
+  };
+  const registerAccount = async (mobile: string, username: string, password: string, countryCode = '+91') => {
+    applySession(await ApiService.registerAccount({ mobile, username, password, countryCode }));
+  };
+  const loginAccount = async (identifier: string, password: string) => {
+    applySession(await ApiService.loginAccount({ identifier, password }));
+  };
+
   const demoLogin = async () => {
     setIsLoading(true);
     try {
@@ -124,6 +145,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         login,
         register,
         demoLogin,
+        registerAccount,
+        loginAccount,
         logout,
         refreshUser,
       }}

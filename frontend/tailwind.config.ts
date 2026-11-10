@@ -10,6 +10,10 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        slate: {
+          750: '#243044',
+          850: '#141d2e',
+        },
         stamp: {
           blue: '#1e3a8a',
           navy: '#0f172a',

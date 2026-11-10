@@ -1,3 +1,5 @@
+import { PRO_TEMPLATES } from './templates-pro';
+import { layoutTemplate } from './template-layout';
 export interface StampTemplateSeed {
   id: string;
   title: string;
@@ -15,7 +17,7 @@ export interface StampTemplateSeed {
   };
 }
 
-export const STAMP_TEMPLATES: StampTemplateSeed[] = [
+const RAW_TEMPLATES: StampTemplateSeed[] = [
   {
     id: 'template-round-10mm',
     title: '10mm Dia Round Stamp',
@@ -1696,7 +1698,7 @@ export const STAMP_TEMPLATES: StampTemplateSeed[] = [
           fontFamily: 'Montserrat',
           fontWeight: 'bold',
           align: 'center',
-          letterSpacing: 0.4,
+          letterSpacing: 1.5,
         },
         {
           id: 'text-handle',
@@ -2579,7 +2581,7 @@ export const STAMP_TEMPLATES: StampTemplateSeed[] = [
           fontFamily: 'Montserrat',
           fontWeight: 'bold',
           align: 'center',
-          letterSpacing: 0.1,
+          letterSpacing: 0.38,
         },
         {
           id: 'text-sub',
@@ -2662,6 +2664,7 @@ export const STAMP_TEMPLATES: StampTemplateSeed[] = [
       fields: {},
       elements: [
         { id: 'sq-outer', type: 'rect', x: 1, y: 1, width: 23, height: 23, rx: 1, ry: 1, strokeWidth: 0.8 },
+        { id: 'qr-code', type: 'qrcode', content: 'https://stamiox.com/verify', cx: 12.5, cy: 12.7, size: 11.5 },
         {
           id: 'text-top',
           type: 'text',
@@ -2683,7 +2686,7 @@ export const STAMP_TEMPLATES: StampTemplateSeed[] = [
           fontFamily: 'Montserrat',
           fontWeight: 'bold',
           align: 'center',
-          letterSpacing: 0.1,
+          letterSpacing: 0.38,
         },
       ],
     },
@@ -2751,4 +2754,16 @@ export const STAMP_TEMPLATES: StampTemplateSeed[] = [
       ],
     },
   },
+  ...PRO_TEMPLATES,
 ];
+
+/**
+ * Every consumer (API + frontend pages that import this file directly) gets the
+ * layout-normalized templates: legacy arc fields converted, text fitted between rings.
+ */
+// Every template opens in black ink (the editor's only ink colour) — set here once for all collections
+export const TEMPLATE_INK = '#111827';
+export const STAMP_TEMPLATES: StampTemplateSeed[] = RAW_TEMPLATES.map(layoutTemplate).map((t) => ({
+  ...t,
+  defaultData: { ...t.defaultData, inkColor: TEMPLATE_INK },
+}));

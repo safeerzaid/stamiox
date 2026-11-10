@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import crypto from 'crypto';
+import { ELEMENT_SCHEMA, normalizeElements, sameDesign } from './ai-elements';
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -23,6 +24,9 @@ export interface AiStampGeneratedPayload {
  * Intelligent Stamp Design Heuristic & Gemini AI Engine
  */
 export class AiStampService {
+  /** Why the last Gemini call failed (for an honest message to the user). */
+  private static lastAiFailure: 'quota' | 'busy' | 'other' | null = null;
+
   /**
    * Unified Antigravity-Level Agentic Reasoning Processor with Multi-Turn Conversational Memory
    */
@@ -45,10 +49,24 @@ export class AiStampService {
         console.log("💎 Gemini RAW Result:", geminiResult);
         
         if (geminiResult && geminiResult.reply) {
-          const hasWeirdElements = geminiResult.elements && geminiResult.elements.some((e: any) => 
-            e.type === 'BORDER' || e.type === 'TEXT_ARC' || e.type === 'TEXT_LINE'
-          );
-          
+          // Repair / validate what the model returned so the editor always gets drawable elements
+          const rawCount = Array.isArray(geminiResult.elements) ? geminiResult.elements.length : 0;
+          if (Array.isArray(geminiResult.elements)) {
+            geminiResult.elements = normalizeElements(geminiResult.elements, {
+              widthMm: geminiResult.widthMm || currentDesign?.widthMm,
+              heightMm: geminiResult.heightMm || currentDesign?.heightMm,
+            });
+          }
+          // A chat answer never changes the design
+          if (geminiResult.action === 'CONVERSATION' && hasExistingElements) {
+            delete geminiResult.elements;
+          }
+          // An edit that came back empty (or lost elements it can't draw) keeps the current design
+          if (geminiResult.action === 'SURGICAL_EDIT' && hasExistingElements && (!geminiResult.elements || geminiResult.elements.length === 0)) {
+            delete geminiResult.elements;
+          }
+          const hasWeirdElements = rawCount > 0 && Array.isArray(geminiResult.elements) && geminiResult.elements.length === 0;
+
           // Force handover to Neural Engine if it's a completely new design or hallucinated element types
           if (geminiResult.action === 'GENERATE_NEW' || (!hasExistingElements && geminiResult.elements && geminiResult.elements.length > 0) || hasWeirdElements) {
             console.log("💎 Gemini triggered GENERATE_NEW or hallucinated geometry, handing over to Neural CAD Engine...");
@@ -84,8 +102,26 @@ export class AiStampService {
       return this.handleConversationalReply(rawPrompt, currentDesign, language);
     }
 
+    // Editing an existing design needs the real AI: the offline rules guessed wrong (removed the
+    // wrong border, pasted the whole sentence as text). Never touch the design without it —
+    // say clearly why, in the user's language, and leave everything as it is.
     if (currentDesign && currentDesign.elements && currentDesign.elements.length > 0) {
-      return this.heuristicRefineEngine(rawPrompt, currentDesign, language);
+      const manglish =
+        language === 'MANGLISH' ||
+        (language !== 'ENGLISH' && /\b(?:aaku|aakku|maattu|maatti|cheyyu|venam|aakki|ith|ini|onnu|koodi|kurachu|aanu|enth)/i.test(rawPrompt));
+      const quota = this.lastAiFailure === 'quota';
+      return {
+        action: 'CONVERSATION',
+        reply: manglish
+          ? quota
+            ? 'Sorry, AI-yude ippozhathe limit theernnu. Oru minute kazhinju onnu koodi try cheyyamo? Design-il onnum maattiyittilla.'
+            : 'Sorry, AI ippol busy aanu — ee change ippol cheyyan pattiyilla. Onnu koodi try cheyyamo? Design-il onnum maattiyittilla.'
+          : quota
+          ? "Sorry — the AI usage limit has been reached for the moment. Please try again in about a minute. Your design has not been changed."
+          : "Sorry — the AI service is busy right now, so I couldn't make that change. Please try again in a moment. Your design has not been changed.",
+        summary: 'No changes made',
+        suggestedFollowUps: [],
+      };
     }
     return this.heuristicSemanticGenerator(rawPrompt, rawPrompt.toLowerCase(), language);
   }
@@ -133,7 +169,7 @@ export class AiStampService {
     const clean = prompt.trim().toLowerCase();
     
     // Explicit Language Override
-    const isExplicitEnglish = language === 'ENGLISH' || (!language && !/(?:aaku|aakku|maattu|maatti|cheyyu|nokk|venam|chuvapp|pacha|vattam|chathuram|katti|idumo|para|ini|ith|sugam|enthokke|nanni|kollam|adipoli|ethra|nallath|aano|machane)/i.test(prompt));
+    const isExplicitEnglish = language === 'ENGLISH' || (!language && !/\b(?:aaku|aakku|maattu|maatti|cheyyu|nokk|venam|chuvapp|pacha|vattam|chathuram|katti|idumo|para|ini|ith|sugam|enthokke|nanni|kollam|adipoli|ethra|nallath|aano|machane)/i.test(prompt));
     const isManglish = language === 'MANGLISH' || (!isExplicitEnglish && language !== 'MALAYALAM');
 
     const existingElements = Array.isArray(currentDesign?.elements) ? JSON.parse(JSON.stringify(currentDesign.elements)) : [];
@@ -313,6 +349,16 @@ CRITICAL SURGICAL EDITING PRINCIPLES:
      - DO NOT output the "elements" array for this action.
    - However, if the user asks to change the *stamp design itself* while in A4 view (e.g., "change name to RASHAD"), treat it as a SURGICAL_EDIT normally.
 
+${ELEMENT_SCHEMA}
+
+ACCURACY RULES:
+- For SURGICAL_EDIT, return the COMPLETE element list: every untouched element copied exactly, plus the requested change. Never drop elements unless asked to remove them.
+- Match text the user refers to case-insensitively (e.g. "kerala" means the element whose text is "KERALA"). Keep the original letter case style (stamps usually use UPPERCASE).
+- "top text" = arc-text with isReversed false; "bottom text" = arc-text with isReversed true; "center/middle text" = type "text".
+- "outer border" = the ring with the largest radius; "inner ring" = the smaller one.
+- Only say a change was made if you actually made it in "elements". If the request is unclear, ask a short question (action CONVERSATION) instead of guessing.
+- For CONVERSATION, do not output "elements".
+
 OUTPUT FORMAT: Strict valid JSON only without markdown or backticks.
 {
   "action": "CONVERSATION" | "SURGICAL_EDIT" | "GENERATE_NEW" | "UPDATE_A4_SETTINGS" | "ADD_A4_COPIES",
@@ -354,7 +400,7 @@ OUTPUT FORMAT: Strict valid JSON only without markdown or backticks.
     } else {
       const isMalayalamScript = /[\u0D00-\u0D7F]/.test(prompt);
       const isHindiScript = /[\u0900-\u097F]/.test(prompt);
-      const isManglish = /(?:aaku|aakku|maattu|maatti|pakaram|cheyyu|nokk|venam|chuvapp|pacha|karupp|vattam|chathuram|katti|idumo|para|ini|ith|njan|ningal|enth|enthokke|nallath|kollam|adipoli|sugam|nanni|polichu|para|parayoo|paranja|venda|aano|ano|undo|machane)/i.test(prompt);
+      const isManglish = /\b(?:aaku|aakku|maattu|maatti|pakaram|cheyyu|nokk|venam|chuvapp|pacha|karupp|vattam|chathuram|katti|idumo|para|ini|ith|njan|ningal|enth|enthokke|nallath|kollam|adipoli|sugam|nanni|polichu|para|parayoo|paranja|venda|aano|ano|undo|machane)/i.test(prompt);
       detectedLanguage = isMalayalamScript ? 'MALAYALAM' : isHindiScript ? 'HINDI' : isManglish ? 'MANGLISH' : 'ENGLISH';
     }
 
@@ -374,22 +420,44 @@ OUTPUT FORMAT: Strict valid JSON only without markdown or backticks.
       ],
     });
 
-    const fastModels = ['gemini-3.6-flash', 'gemini-flash-latest'];
+    // Speed: thinking off (it tripled reply time), a hard timeout per model so an overloaded
+    // model can't hang the chat for ~35 s, and an overall budget — past it the instant local
+    // engine answers instead. Output limit is high enough that edits returning the whole
+    // design aren't cut off (a truncated reply used to trigger a second, slow call).
+    const attempts: Array<{ model: string; timeoutMs: number; noThinking: boolean }> = [
+      // Flash Lite answers in ~2 s and is far less often overloaded; 3.6 Flash is the backup
+      { model: 'gemini-flash-lite-latest', timeoutMs: 6000, noThinking: false }, // lite rejects a thinking budget
+      { model: 'gemini-3.6-flash', timeoutMs: 7000, noThinking: true },
+    ];
+    const TOTAL_BUDGET_MS = 16000;
+    const startedAt = Date.now();
+    this.lastAiFailure = null;
     const genAI = new GoogleGenerativeAI(apiKey);
+    // "high demand" (503) spikes are usually over in a moment — retry each model once
+    const queue = attempts.flatMap((a) => [{ ...a, retry: false }, { ...a, retry: true }]);
+    let lastWasBusy = false;
 
-    for (const modelName of fastModels) {
+    for (const { model: modelName, timeoutMs, noThinking, retry } of queue) {
+      if (retry && !lastWasBusy) continue; // only retry after a 503
+      if (retry) await new Promise((r) => setTimeout(r, 700));
+      lastWasBusy = false;
+      const remaining = TOTAL_BUDGET_MS - (Date.now() - startedAt);
+      if (remaining < 2000) break;
       try {
-        const model = genAI.getGenerativeModel({
-          model: modelName,
-          systemInstruction,
-          generationConfig: {
-            responseMimeType: 'application/json',
-            temperature: 0.1,
-            maxOutputTokens: 1024,
-          },
-        });
+        const generationConfig: any = {
+          responseMimeType: 'application/json',
+          temperature: 0.1,
+          maxOutputTokens: 4096,
+        };
+        if (noThinking) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+        const model = genAI.getGenerativeModel(
+          { model: modelName, systemInstruction, generationConfig },
+          { timeout: Math.min(timeoutMs, remaining) }
+        );
 
+        const t0 = Date.now();
         const result = await model.generateContent({ contents: formattedContents });
+        console.log(`⚡ ${modelName} replied in ${Date.now() - t0} ms`);
         const response = result.response;
         const text = response.text();
         
@@ -410,7 +478,10 @@ OUTPUT FORMAT: Strict valid JSON only without markdown or backticks.
           }
         }
       } catch (e: any) {
-        console.warn(`Fast model ${modelName} error:`, e.message || e);
+        const msg = String(e?.message || e);
+        lastWasBusy = /\b503\b|high demand|overloaded|unavailable/i.test(msg);
+        this.lastAiFailure = /\b429\b|quota|rate limit/i.test(msg) ? 'quota' : lastWasBusy ? 'busy' : 'other';
+        console.warn(`Fast model ${modelName}${retry ? ' (retry)' : ''} error:`, msg.slice(0, 200));
         continue;
       }
     }
@@ -423,7 +494,7 @@ OUTPUT FORMAT: Strict valid JSON only without markdown or backticks.
    */
   private static heuristicRefineEngine(prompt: string, currentDesign: any, language?: string): AiStampGeneratedPayload {
     const lower = prompt.toLowerCase();
-    const isExplicitEnglish = language === 'ENGLISH' || (!language && !/(?:aaku|aakku|maattu|maatti|pakaram|cheyyu|nokk|venam|chuvapp|pacha|karupp|vattam|chathuram|katti|idumo|para|ini|ith)/i.test(prompt));
+    const isExplicitEnglish = language === 'ENGLISH' || (!language && !/\b(?:aaku|aakku|maattu|maatti|pakaram|cheyyu|nokk|venam|chuvapp|pacha|karupp|vattam|chathuram|katti|idumo|para|ini|ith)/i.test(prompt));
     const isManglish = language === 'MANGLISH' || (!isExplicitEnglish && language !== 'MALAYALAM');
 
     const existingElements: any[] = Array.isArray(currentDesign?.elements) ? JSON.parse(JSON.stringify(currentDesign.elements)) : [];
@@ -1090,7 +1161,7 @@ OUTPUT FORMAT: Strict valid JSON only without markdown or backticks.
       }
     }
 
-    const isExplicitEnglish = language === 'ENGLISH' || (!language && !/(?:aaku|aakku|maattu|maatti|pakaram|cheyyu|nokk|venam|chuvapp|pacha|karupp|vattam|chathuram|katti|idumo|para|ini|ith|njan|ningal|enth|enthokke|nallath|kollam|adipoli|sugam|nanni|polichu|para|parayoo|paranja|venda)/i.test(rawPrompt));
+    const isExplicitEnglish = language === 'ENGLISH' || (!language && !/\b(?:aaku|aakku|maattu|maatti|pakaram|cheyyu|nokk|venam|chuvapp|pacha|karupp|vattam|chathuram|katti|idumo|para|ini|ith|njan|ningal|enth|enthokke|nallath|kollam|adipoli|sugam|nanni|polichu|para|parayoo|paranja|venda)/i.test(rawPrompt));
     const isManglish = language === 'MANGLISH' || (!isExplicitEnglish && language !== 'MALAYALAM');
     const humanReply = isManglish
       ? `'${lines.topText}'-nu vendi ${widthMm}x${heightMm}mm ${shape.toLowerCase()} stamp design ready aakkiyittund! Typography-um layout-um standard CAD format-il set cheythu.`

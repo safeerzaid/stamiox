@@ -1,5 +1,7 @@
 'use client';
 
+import { playOpenTransition } from '../../lib/open-transition';
+import { generateStampSvg } from '../../lib/svg-generator';
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -82,8 +84,21 @@ export default function UseCasesPage() {
   }) as any[];
 
   const handleOpenInStudio = (template: StampTemplate) => {
-    loadTemplate(template);
-    router.push('/editor');
+    playOpenTransition({
+      templateId: template.id,
+      title: template.title,
+      svg: generateStampSvg({
+        widthMm: template.widthMm,
+        heightMm: template.heightMm,
+        inkColor: template.defaultData.inkColor || '#1e3a8a',
+        elements: template.defaultData.elements || [],
+        shape: template.shape,
+      }),
+      onOpen: () => {
+        loadTemplate(template);
+        router.push('/editor');
+      },
+    });
   };
 
   return (

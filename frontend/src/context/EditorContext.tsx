@@ -17,7 +17,10 @@ import {
 import { A4StampInstance, A4SheetConfig, COMMON_A4_PRESET_SIZES } from '../types/a4-sheet';
 import { autoNestStampsOnA4, cloneStampToSize } from '../lib/a4-export-engine';
 import { STAMP_MOUNT_PRESETS } from '../lib/units';
+import { morphBetweenShapeFamilies, hasEdgeBorder, makeEdgeBorder } from '../lib/shape-morph';
 import { ApiService } from '../lib/api';
+import { storeGet, storeSet } from '../lib/local-store';
+import { ensureFontsFor } from '../lib/font-loader';
 import { STAMP_TEMPLATES } from '../../../backend/src/data/templates';
 
 interface EditorContextType {
@@ -61,6 +64,8 @@ interface EditorContextType {
   setShape: (shape: StampShapeType) => void;
   setInkColor: (color: string) => void;
   setMountPreset: (preset: StampMountPreset) => void;
+  /** Switch the canvas to a shape (ROUND / SQUARE / RECTANGULAR / OVAL) using the closest-size preset. */
+  switchCanvasShape: (shape: StampShapeType, opts?: { ensureBorder?: boolean }) => void;
   setProjectTitle: (title: string) => void;
   setSelectedId: (id: string | null) => void;
   setSelectedIds: (ids: string[]) => void;
@@ -69,8 +74,13 @@ interface EditorContextType {
   setLaserInvert: (inv: boolean) => void;
   setLaserMirror: (mir: boolean) => void;
   setDistressEffect: (dist: boolean) => void;
+  /** When on, adding a Box/Ring border switches the canvas to that shape. */
+  autoCanvasShape: boolean;
+  setAutoCanvasShape: (on: boolean) => void;
   setShowRulers: (show: boolean) => void;
   setShowGrid: (show: boolean) => void;
+  /** Increments every time a whole design is loaded (template / project / blank / AI) — drives the entrance animation. */
+  designLoadKey: number;
   setSnapToCenter: (snap: boolean) => void;
   setIsLeftSidebarOpen: (open: boolean) => void;
   setIsRightSidebarOpen: (open: boolean) => void;
@@ -82,6 +92,11 @@ interface EditorContextType {
   updateElement: (id: string, updates: Partial<StampElement>) => void;
   deleteElement: (id: string) => void;
   duplicateElement: (id: string) => void;
+  canCopy: boolean;
+  canPaste: boolean;
+  copySelected: () => void;
+  cutSelected: () => void;
+  pasteElement: (targetPos?: { x: number; y: number }) => void;
   bringForward: (id: string) => void;
   sendBackward: (id: string) => void;
   bringToFront: (id: string) => void;
@@ -97,6 +112,11 @@ interface EditorContextType {
   pushHistory: (customSnapshot?: StampElement[]) => void;
   undo: () => void;
   redo: () => void;
+
+  // Grouping & Selection
+  selectAll: () => void;
+  groupElements: (ids?: string[]) => string | null;
+  ungroupElements: (ids?: string[]) => void;
 
   // Project & Template Loading
   loadProject: (project: any) => void;
@@ -117,11 +137,15 @@ interface EditorContextType {
     heightMm?: number;
   }) => void;
   saveProjectToCloud: () => Promise<string | null>;
+  /** Save the current design to the account as a reusable template (always a new copy). */
+  saveAsTemplate: (title: string) => Promise<boolean>;
   resetToBlank: (shape?: StampShapeType, width?: number, height?: number) => void;
 
   // A4 Multi-Stamp Gang-Sheet Imposition
   viewMode: 'SINGLE' | 'A4_SHEET';
   setViewMode: (mode: 'SINGLE' | 'A4_SHEET') => void;
+  /** True once the saved view (Single / A4) has been read — the editor waits for it so it never flashes the wrong view. */
+  viewRestored: boolean;
   a4Instances: A4StampInstance[];
   setA4Instances: React.Dispatch<React.SetStateAction<A4StampInstance[]>>;
   selectedA4InstanceId: string | null;
@@ -176,8 +200,35 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [laserInvert, setLaserInvert] = useState<boolean>(false);
   const [laserMirror, setLaserMirror] = useState<boolean>(false);
   const [distressEffect, setDistressEffect] = useState<boolean>(false);
+
+  // "Auto canvas shape": the background follows the border (Box → square, Ring → round).
+  // On by default; the user's choice is remembered in this browser.
+  const AUTO_SHAPE_KEY = 'stamiox_auto_canvas_shape';
+  const [autoCanvasShape, setAutoCanvasShapeState] = useState<boolean>(true);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(AUTO_SHAPE_KEY);
+      if (saved === 'false') setAutoCanvasShapeState(false);
+    } catch {
+      /* storage unavailable — keep default (on) */
+    }
+  }, []);
+  const setAutoCanvasShape = (on: boolean) => {
+    setAutoCanvasShapeState(on);
+    try {
+      localStorage.setItem(AUTO_SHAPE_KEY, String(on));
+    } catch {
+      /* ignore */
+    }
+  };
   const [showRulers, setShowRulers] = useState<boolean>(true);
   const [showGrid, setShowGrid] = useState<boolean>(true);
+  const [designLoadKey, setDesignLoadKey] = useState<number>(0);
+  const designLoadKeyRef = useRef(0); // read by the restore step (a newly opened design wins)
+  const bumpDesignLoad = () => {
+    designLoadKeyRef.current += 1;
+    setDesignLoadKey((k) => k + 1);
+  };
   const [snapToCenter, setSnapToCenter] = useState<boolean>(true);
 
   // Sidebar Visibility State (Figma / Canva style collapsible rails)
@@ -208,6 +259,10 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const elementsRef = useRef<StampElement[]>(elements);
   elementsRef.current = elements;
+  const selectedIdRef = useRef<string | null>(selectedId);
+  selectedIdRef.current = selectedId;
+  const selectedIdsRef = useRef<string[]>(selectedIds);
+  selectedIdsRef.current = selectedIds;
 
   const historyRef = useRef<StampElement[][]>([]);
   const redoStackRef = useRef<StampElement[][]>([]);
@@ -280,19 +335,45 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [projectTitle, widthMm, heightMm, shape, elements, inkColor, mountPreset, a4Config]);
 
   const generateA4SizeVariants = useCallback(() => {
-    const variants: A4StampInstance[] = [
-      cloneStampToSize(elements, widthMm, heightMm, 45, 45, 'ROUND', `${projectTitle} (Ø45mm)`, inkColor, 'Colop Printer R45'),
-      cloneStampToSize(elements, widthMm, heightMm, 40, 40, 'ROUND', `${projectTitle} (Ø40mm)`, inkColor, 'Colop Printer R40'),
-      cloneStampToSize(elements, widthMm, heightMm, 35, 35, 'ROUND', `${projectTitle} (Ø35mm)`, inkColor, 'Colop Printer R35'),
-      cloneStampToSize(elements, widthMm, heightMm, 30, 30, 'ROUND', `${projectTitle} (Ø30mm)`, inkColor, 'Colop Printer R30'),
-      cloneStampToSize(elements, widthMm, heightMm, 25, 25, 'ROUND', `${projectTitle} (Ø25mm)`, inkColor, 'Trodat Printy 46025'),
-    ];
+    // 5 sizes of THIS stamp: real mounts of the same shape & proportions first, then evenly
+    // scaled sizes. Borders are redrawn at the new size and the rest is scaled evenly to fit
+    // inside them — never stretched, never turned into another shape.
+    const aspect = widthMm / heightMm;
+    const r05 = (v: number) => Math.round(v * 2) / 2;
+    const fmt = (w: number, h: number) => (shape === 'ROUND' ? `Ø${w}mm` : `${w}×${h}mm`);
+    const candidates: { w: number; h: number; mount: string }[] = STAMP_MOUNT_PRESETS
+      .filter((p) => p.shape === shape && Math.abs(p.widthMm / p.heightMm - aspect) / aspect < 0.12)
+      .map((p) => ({ w: p.widthMm, h: p.heightMm, mount: p.name }));
+    for (const k of [1.25, 1.1, 0.9, 0.8, 0.65]) {
+      candidates.push({ w: r05(widthMm * k), h: r05(heightMm * k), mount: 'Custom size' });
+    }
+    const seen = new Set<string>([`${widthMm}x${heightMm}`]);
+    const picked = candidates
+      .filter((c) => {
+        const key = `${c.w}x${c.h}`;
+        if (seen.has(key) || c.w < 8 || c.h < 8) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => Math.abs(a.w * a.h - widthMm * heightMm) - Math.abs(b.w * b.h - widthMm * heightMm))
+      .slice(0, 5)
+      .sort((a, b) => b.w * b.h - a.w * a.h);
+
+    const variants: A4StampInstance[] = picked.map(({ w, h, mount }) => {
+      const inst = cloneStampToSize(elements, widthMm, heightMm, w, h, shape, `${projectTitle} (${fmt(w, h)})`, inkColor, mount);
+      const tag = Math.random().toString(36).slice(2, 6);
+      inst.elements = morphBetweenShapeFamilies(elements, widthMm, heightMm, w, h, shape).map((el: any) => ({
+        ...el,
+        id: `${el.id}-${tag}`, // unique per copy (logo masks are keyed by id)
+      }));
+      return inst;
+    });
 
     setA4Instances((prev) => {
       const updated = [...prev, ...variants];
       return autoNestStampsOnA4(updated, a4Config);
     });
-  }, [elements, widthMm, heightMm, projectTitle, inkColor, a4Config]);
+  }, [elements, widthMm, heightMm, shape, projectTitle, inkColor, a4Config]);
 
   const autoNestA4 = useCallback(() => {
     setA4Instances((prev) => autoNestStampsOnA4(prev, a4Config));
@@ -334,6 +415,152 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Seamless 1-Click: Edit Specific A4 Stamp Instance in Full Single Stamp Studio
   const [editingA4InstanceId, setEditingA4InstanceId] = useState<string | null>(null);
 
+  // ── Work-in-progress survives a refresh (this browser only) ──
+  // The current design and the A4 sheet are kept in IndexedDB (room for logo images);
+  // the view (Single / A4) on its own tiny localStorage key. Everything is restored once
+  // on load, and saving only starts after that, so empty defaults never overwrite saved work.
+  const VIEW_MODE_KEY = 'stamiox_view_mode';
+  const [a4Restored, setA4Restored] = useState(false); // "work restored" — the editor waits for it
+  useEffect(() => {
+    let cancelled = false;
+    const designBefore = designLoadKeyRef.current;
+    (async () => {
+      try {
+        if (localStorage.getItem(VIEW_MODE_KEY) === 'A4_SHEET') setViewMode('A4_SHEET');
+      } catch {
+        /* storage unavailable */
+      }
+      const [design, rawSheet] = await Promise.all([
+        storeGet<any>('current-design'),
+        storeGet<any>('a4-sheet'),
+      ]);
+      if (cancelled) return;
+
+      let sheet = rawSheet;
+      // Purge legacy auto-populated A4 stamps from previous sessions so A4 sheet starts clean
+      try {
+        const purgedKey = 'stamiox_a4_auto_clean_v3';
+        if (!localStorage.getItem(purgedKey)) {
+          localStorage.setItem(purgedKey, 'true');
+          localStorage.removeItem('stamiox_a4_sheet');
+          await storeSet('a4-sheet', { instances: [], config: a4Config });
+          sheet = { instances: [], config: a4Config };
+        }
+      } catch {
+        /* ignore */
+      }
+
+      // A4 sheet (fall back to the older localStorage copy once)
+      let a4 = sheet;
+      if (!a4) {
+        try {
+          const raw = localStorage.getItem('stamiox_a4_sheet');
+          if (raw) a4 = JSON.parse(raw);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (a4) {
+        if (Array.isArray(a4.instances)) setA4Instances(a4.instances);
+        if (a4.config && typeof a4.config === 'object') setA4Config((prev) => ({ ...prev, ...a4.config }));
+      }
+
+      // Current design — unless a template / project was opened while we were loading
+      if (design && Array.isArray(design.elements) && designLoadKeyRef.current === designBefore) {
+        setElements(design.elements);
+        if (design.widthMm) setWidthMm(design.widthMm);
+        if (design.heightMm) setHeightMm(design.heightMm);
+        if (design.shape) setShape(design.shape);
+        if (design.inkColor) setInkColor(design.inkColor);
+        setMountPresetState(STAMP_MOUNT_PRESETS.find((p) => p.id === design.mountPresetId) || null);
+        if (typeof design.projectTitle === 'string') setProjectTitle(design.projectTitle);
+        setProjectId(design.projectId ?? null);
+        setLaserMirror(!!design.laserMirror);
+        setDistressEffect(!!design.distressEffect);
+        setEditingA4InstanceId(null);
+        setHasUnsavedChanges(!!design.hasUnsavedChanges);
+        setSelectedIdState(null);
+        setSelectedIdsState([]);
+      }
+      setA4Restored(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!a4Restored) return;
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, viewMode);
+    } catch {
+      /* private mode — ignore */
+    }
+  }, [a4Restored, viewMode]);
+
+  // save shortly after the last change (a drag doesn't write on every frame)
+  useEffect(() => {
+    if (!a4Restored) return;
+    const t = window.setTimeout(() => {
+      storeSet('current-design', {
+        elements,
+        widthMm,
+        heightMm,
+        shape,
+        inkColor,
+        mountPresetId: mountPreset?.id ?? null,
+        projectTitle,
+        projectId,
+        laserMirror,
+        distressEffect,
+        editingA4InstanceId: null,
+        hasUnsavedChanges,
+        savedAt: Date.now(),
+      });
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [a4Restored, elements, widthMm, heightMm, shape, inkColor, mountPreset, projectTitle, projectId, laserMirror, distressEffect, hasUnsavedChanges]);
+
+  useEffect(() => {
+    if (!a4Restored) return;
+    const t = window.setTimeout(() => {
+      storeSet('a4-sheet', { instances: a4Instances, config: a4Config });
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [a4Restored, a4Instances, a4Config]);
+
+  // fonts used by the design / A4 sheet are fetched on demand (extra fonts are not preloaded)
+  useEffect(() => {
+    ensureFontsFor(elements as any);
+  }, [elements]);
+  useEffect(() => {
+    for (const inst of a4Instances) ensureFontsFor(inst.elements as any);
+  }, [a4Instances]);
+
+  // a pending save must not be lost when the tab is closed / refreshed right after a change
+  const latestWorkRef = useRef<() => void>(() => {});
+  latestWorkRef.current = () => {
+    if (!a4Restored) return;
+    storeSet('current-design', {
+      elements, widthMm, heightMm, shape, inkColor, mountPresetId: mountPreset?.id ?? null, projectTitle, projectId,
+      laserMirror, distressEffect, editingA4InstanceId: null, hasUnsavedChanges, savedAt: Date.now(),
+    });
+    storeSet('a4-sheet', { instances: a4Instances, config: a4Config });
+  };
+  useEffect(() => {
+    const flush = () => latestWorkRef.current();
+    window.addEventListener('pagehide', flush);
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    document.addEventListener('visibilitychange', onHidden);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onHidden);
+    };
+  }, []);
+
   const editA4InstanceInSingleEditor = useCallback(
     (instanceId: string) => {
       const target = a4Instances.find((x) => x.instanceId === instanceId);
@@ -357,28 +584,20 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setViewMode('A4_SHEET');
   }, []);
 
-  // Synchronize edits made in Single Stamp Editor back to that specific A4 instance in real-time
-  useEffect(() => {
-    if (!editingA4InstanceId) return;
-    setA4Instances((prev) =>
-      prev.map((inst) =>
-        inst.instanceId === editingA4InstanceId
-          ? {
-              ...inst,
-              elements: JSON.parse(JSON.stringify(elements)),
-              widthMm,
-              heightMm,
-              shape,
-              inkColor,
-            }
-          : inst
-      )
-    );
-  }, [elements, widthMm, heightMm, shape, inkColor, editingA4InstanceId]);
-
   // Proportional Auto-Adaptation Engine when Casing Size / Shape Changes
-  const setMountPreset = (preset: StampMountPreset) => {
-    if (elements.length > 0 && widthMm > 0 && heightMm > 0) {
+  const setMountPreset = (preset: StampMountPreset): StampElement[] => {
+    let result: StampElement[] = elements;
+    // shape families: round, oval, box (square / rectangular)
+    const family = (s: string) => (s === 'SQUARE' || s === 'RECTANGULAR' ? 'box' : s === 'OVAL' ? 'oval' : 'round');
+    const familyChange = family(shape) !== family(preset.shape);
+
+    if (familyChange && elements.length > 0 && widthMm > 0 && heightMm > 0) {
+      // Round ↔ Square/Rect: edge borders become the new shape, the rest is scaled to fit inside.
+      const adapted = morphBetweenShapeFamilies(elements, widthMm, heightMm, preset.widthMm, preset.heightMm, preset.shape);
+      result = adapted;
+      pushHistory(elements);
+      setElements(adapted);
+    } else if (elements.length > 0 && widthMm > 0 && heightMm > 0) {
       const scaleX = preset.widthMm / widthMm;
       const scaleY = preset.heightMm / heightMm;
       const scaleMin = Math.min(preset.widthMm, preset.heightMm) / Math.min(widthMm, heightMm);
@@ -648,6 +867,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       pushHistory(elements);
       setElements(adaptedElements);
+      result = adaptedElements as StampElement[];
     }
 
     setMountPresetState(preset);
@@ -655,6 +875,23 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setHeightMm(preset.heightMm);
     setShape(preset.shape);
     setHasUnsavedChanges(true);
+    return result;
+  };
+
+  // Switch the canvas to a shape using the preset closest in area (borders are morphed by setMountPreset)
+  const switchCanvasShape = (target: StampShapeType, opts?: { ensureBorder?: boolean }) => {
+    if (!target || target === shape) return;
+    const area = widthMm * heightMm;
+    const candidates = STAMP_MOUNT_PRESETS.filter((p) => p.shape === target);
+    if (!candidates.length) return;
+    const best = candidates.reduce((a, b) =>
+      Math.abs(b.widthMm * b.heightMm - area) < Math.abs(a.widthMm * a.heightMm - area) ? b : a
+    );
+    const next = setMountPreset(best);
+    // e.g. adding a Box to an empty round stamp: give the new shape its own border
+    if (opts?.ensureBorder && !hasEdgeBorder(next, best.widthMm, best.heightMm)) {
+      setElements([...next, makeEdgeBorder(best.shape, best.widthMm, best.heightMm) as StampElement]);
+    }
   };
 
   // Add Element
@@ -728,6 +965,158 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     },
     [elements, pushHistory]
   );
+
+  // Clipboard (Copy / Cut / Paste)
+  const [clipboard, setClipboard] = useState<StampElement[]>([]);
+  const clipboardRef = useRef<StampElement[]>([]);
+  clipboardRef.current = clipboard;
+  const pasteOffsetCountRef = useRef<number>(1);
+
+  // Initialize from sessionStorage if present
+  useEffect(() => {
+    try {
+      const stored = typeof window !== 'undefined' ? sessionStorage.getItem('stamiox_clipboard') : null;
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setClipboard(parsed);
+        }
+      }
+    } catch {}
+  }, []);
+
+  const copySelected = useCallback(() => {
+    const liveSelectedIds = selectedIdsRef.current;
+    const liveSelectedId = selectedIdRef.current;
+    let targets: StampElement[] = [];
+
+    if (liveSelectedIds && liveSelectedIds.length > 0) {
+      targets = elementsRef.current.filter((el) => liveSelectedIds.includes(el.id));
+    } else if (liveSelectedId) {
+      const found = elementsRef.current.find((el) => el.id === liveSelectedId);
+      if (found) targets = [found];
+    }
+
+    if (targets.length === 0) return;
+
+    const cloned: StampElement[] = JSON.parse(JSON.stringify(targets));
+    setClipboard(cloned);
+    pasteOffsetCountRef.current = 1;
+    try {
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('stamiox_clipboard', JSON.stringify(cloned));
+      }
+    } catch {}
+    // also claim the system clipboard, so a picture copied earlier elsewhere isn't pasted instead
+    try {
+      navigator.clipboard?.writeText?.('[Stamiox layer]').catch(() => {});
+    } catch {}
+  }, []);
+
+  const cutSelected = useCallback(() => {
+    copySelected();
+    const liveSelectedIds = selectedIdsRef.current;
+    const liveSelectedId = selectedIdRef.current;
+
+    if (liveSelectedIds && liveSelectedIds.length > 0) {
+      pushHistory(elementsRef.current);
+      setElements((prev) => prev.filter((el) => !liveSelectedIds.includes(el.id)));
+      setSelectedId(null);
+      setSelectedIds([]);
+    } else if (liveSelectedId) {
+      deleteElement(liveSelectedId);
+    }
+  }, [copySelected, deleteElement, pushHistory]);
+
+  const pasteElement = useCallback(
+    (targetPos?: { x: number; y: number }) => {
+      const items = clipboardRef.current;
+      if (!items || items.length === 0) return;
+
+      pushHistory(elementsRef.current);
+
+      const stepOffset = 2.5 * pasteOffsetCountRef.current;
+      pasteOffsetCountRef.current += 1;
+
+      let deltaX = stepOffset;
+      let deltaY = stepOffset;
+
+      if (targetPos) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        items.forEach((item) => {
+          const x = (item as any).x ?? (item as any).cx ?? 0;
+          const y = (item as any).y ?? (item as any).cy ?? 0;
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        });
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+        deltaX = targetPos.x - centerX;
+        deltaY = targetPos.y - centerY;
+      }
+
+      const newPastedElements: StampElement[] = [];
+      const newIds: string[] = [];
+      const groupMap = new Map<string, string>();
+
+      items.forEach((original) => {
+        const newId = 'el_' + Math.random().toString(36).substring(2, 9);
+        newIds.push(newId);
+
+        let newGroupId = original.groupId;
+        if (original.groupId) {
+          if (!groupMap.has(original.groupId)) {
+            groupMap.set(original.groupId, 'grp_' + Math.random().toString(36).substring(2, 9));
+          }
+          newGroupId = groupMap.get(original.groupId);
+        }
+
+        let pasted: StampElement;
+        if (original.type === 'text' || original.type === 'rect' || original.type === 'image') {
+          pasted = {
+            ...original,
+            id: newId,
+            groupId: newGroupId,
+            x: Math.round(((original as any).x + deltaX) * 10) / 10,
+            y: Math.round(((original as any).y + deltaY) * 10) / 10,
+          } as StampElement;
+        } else if (
+          original.type === 'arc-text' ||
+          original.type === 'ring' ||
+          original.type === 'clipart' ||
+          original.type === 'oval'
+        ) {
+          pasted = {
+            ...original,
+            id: newId,
+            groupId: newGroupId,
+            cx: Math.round(((original as any).cx + deltaX) * 10) / 10,
+            cy: Math.round(((original as any).cy + deltaY) * 10) / 10,
+          } as StampElement;
+        } else {
+          pasted = { ...original, id: newId, groupId: newGroupId };
+        }
+
+        newPastedElements.push(pasted);
+      });
+
+      setElements((prev) => [...prev, ...newPastedElements]);
+
+      if (newIds.length === 1) {
+        setSelectedId(newIds[0]);
+        setSelectedIds([]);
+      } else {
+        setSelectedId(newIds[newIds.length - 1]);
+        setSelectedIds(newIds);
+      }
+    },
+    [pushHistory]
+  );
+
+  const canCopy = !!selectedId || selectedIds.length > 0;
+  const canPaste = clipboard.length > 0;
 
   // Layer Ordering
   const bringForward = useCallback((id: string) => {
@@ -825,6 +1214,36 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         prev.map((el) => {
           if (el.id !== selectedId) return el;
 
+          // logo / QR code / clipart move by their centre point (same spots as text)
+          const kind = el.type as string; // plain string so the checks below keep their types
+          if (kind === 'image' || kind === 'qrcode' || kind === 'clipart') {
+            const b = el as any;
+            const isImg = kind === 'image';
+            const mx = isImg ? b.x + (b.width || 0) / 2 : b.cx;
+            const my = isImg ? b.y + (b.height || 0) / 2 : b.cy;
+            const tx: Record<string, number> = { 'center-page': centerX, 'center-h': centerX, left: widthMm * 0.28, right: widthMm * 0.72 };
+            const ty: Record<string, number> = { 'center-page': centerY, 'center-v': centerY, top: heightMm * 0.32, bottom: heightMm * 0.68 };
+            const nx = alignment in tx ? tx[alignment] : mx;
+            const ny = alignment in ty ? ty[alignment] : my;
+            const r = (v: number) => Number(v.toFixed(2));
+            return isImg
+              ? { ...b, x: r(nx - (b.width || 0) / 2), y: r(ny - (b.height || 0) / 2) }
+              : { ...b, cx: r(nx), cy: r(ny) };
+          }
+
+          // a line moves by its centre point (same spots as text)
+          if (el.type === 'line') {
+            const ln = el as any;
+            const mx = (ln.x1 + ln.x2) / 2;
+            const my = (ln.y1 + ln.y2) / 2;
+            const tx: Record<string, number> = { 'center-page': centerX, 'center-h': centerX, left: widthMm * 0.28, right: widthMm * 0.72 };
+            const ty: Record<string, number> = { 'center-page': centerY, 'center-v': centerY, top: heightMm * 0.32, bottom: heightMm * 0.68 };
+            const dx = alignment in tx ? tx[alignment] - mx : 0;
+            const dy = alignment in ty ? ty[alignment] - my : 0;
+            const r = (v: number) => Number(v.toFixed(2));
+            return { ...ln, x1: r(ln.x1 + dx), x2: r(ln.x2 + dx), y1: r(ln.y1 + dy), y2: r(ln.y2 + dy) };
+          }
+
           if (alignment === 'center-page') {
             if (el.type === 'text') return { ...el, x: centerX, y: centerY };
             if (el.type === 'arc-text') return { ...el, cx: centerX, cy: centerY, angleOffset: 0 };
@@ -879,6 +1298,53 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // Distribute logic across elements
   }, []);
 
+  // Selection & Grouping (Ctrl+A to select all, Ctrl+G to group, Ctrl+Shift+G / Ctrl+U to ungroup)
+  const selectAll = useCallback(() => {
+    const allIds = elementsRef.current.filter((el) => el.visible !== false && !el.locked).map((el) => el.id);
+    setSelectedIds(allIds);
+    setSelectedId(null);
+  }, []);
+
+  const groupElements = useCallback((ids?: string[]) => {
+    const targetIds = ids && ids.length > 0 ? ids : selectedIdsRef.current;
+    if (targetIds.length < 2) return null;
+
+    pushHistory(elementsRef.current);
+    const newGroupId = `grp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    setElements((prev) =>
+      prev.map((el) => (targetIds.includes(el.id) ? { ...el, groupId: newGroupId } : el))
+    );
+    setSelectedIds(targetIds);
+    setSelectedId(null);
+    setHasUnsavedChanges(true);
+    return newGroupId;
+  }, [pushHistory]);
+
+  const ungroupElements = useCallback((ids?: string[]) => {
+    const targetIds = ids && ids.length > 0
+      ? ids
+      : (selectedIdsRef.current.length > 0
+          ? selectedIdsRef.current
+          : (selectedIdRef.current ? [selectedIdRef.current] : []));
+    if (targetIds.length === 0) return;
+
+    // Find all groupIds present in target elements
+    const groupIdsToUngroup = new Set<string>();
+    elementsRef.current.forEach((el) => {
+      if (targetIds.includes(el.id) && el.groupId) {
+        groupIdsToUngroup.add(el.groupId);
+      }
+    });
+
+    if (groupIdsToUngroup.size === 0) return;
+
+    pushHistory(elementsRef.current);
+    setElements((prev) =>
+      prev.map((el) => (el.groupId && groupIdsToUngroup.has(el.groupId) ? { ...el, groupId: undefined } : el))
+    );
+    setHasUnsavedChanges(true);
+  }, [pushHistory]);
+
   // History: Undo / Redo (Supports multi-step consecutive Ctrl+Z undos)
   const undo = useCallback(() => {
     const currentHist = historyRef.current;
@@ -920,6 +1386,9 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // Loaders
   const loadProject = (project: any) => {
+    bumpDesignLoad();
+    setViewMode('SINGLE'); // a newly opened design always starts in the single-stamp editor
+    setEditingA4InstanceId(null);
     setProjectId(project.id);
     setProjectTitle(project.title);
     setWidthMm(project.widthMm);
@@ -936,6 +1405,9 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const loadTemplate = (template: StampTemplate) => {
+    bumpDesignLoad();
+    setViewMode('SINGLE'); // a newly opened design always starts in the single-stamp editor
+    setEditingA4InstanceId(null);
     setProjectId(null);
     setProjectTitle(template.title);
     setWidthMm(template.widthMm);
@@ -944,6 +1416,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setInkColor(template.defaultData.inkColor || '#1e3a8a');
     setElements(JSON.parse(JSON.stringify(template.defaultData.elements || [])));
     setSelectedId(null);
+    setSelectedIds([]);
     historyRef.current = [];
     redoStackRef.current = [];
     setHistory([]);
@@ -959,6 +1432,8 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     inkColor: string;
     elements: StampElement[];
   }) => {
+    bumpDesignLoad();
+    setEditingA4InstanceId(null);
     // Push current state to undo history before overwriting
     if (elements.length > 0) {
       pushHistory();
@@ -994,6 +1469,8 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const resetToBlank = (newShape: StampShapeType = 'ROUND', w = 40, h = 40) => {
+    bumpDesignLoad();
+    setEditingA4InstanceId(null);
     setProjectId(null);
     setProjectTitle('New Custom Stamp');
     setShape(newShape);
@@ -1036,15 +1513,24 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const saveProjectToCloud = async (): Promise<string | null> => {
     setIsSaving(true);
     try {
+      let updated = false;
       if (projectId) {
-        await ApiService.updateProject(projectId, {
-          title: projectTitle,
-          shape,
-          widthMm,
-          heightMm,
-          inkColor,
-          elementsJson: elements,
-        });
+        try {
+          await ApiService.updateProject(projectId, {
+            title: projectTitle,
+            shape,
+            widthMm,
+            heightMm,
+            inkColor,
+            elementsJson: elements,
+          });
+          updated = true;
+        } catch {
+          // the remembered design is gone or belongs to another account → save as a new design
+          setProjectId(null);
+        }
+      }
+      if (updated) {
         setHasUnsavedChanges(false);
         return projectId;
       } else {
@@ -1071,6 +1557,24 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
+  const saveAsTemplate = async (title: string): Promise<boolean> => {
+    try {
+      const res = await ApiService.createProject({
+        title: title.trim() || projectTitle,
+        shape,
+        widthMm,
+        heightMm,
+        inkColor,
+        elementsJson: elements,
+        isTemplate: true,
+      });
+      return !!res.success;
+    } catch (err) {
+      console.error('Save template error:', err);
+      return false;
+    }
+  };
+
   // Keyboard Shortcuts (Arrow keys for 0.5mm nudges, Shift+Arrows for 2mm nudges, Delete, Undo/Redo)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1090,21 +1594,45 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
         e.preventDefault();
         redo();
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd' && selectedId) {
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
         e.preventDefault();
-        duplicateElement(selectedId);
+        selectAll();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'g') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          ungroupElements();
+        } else {
+          groupElements();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'u') {
+        e.preventDefault();
+        ungroupElements();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && (selectedIdRef.current || selectedIdsRef.current.length > 0)) {
+        e.preventDefault();
+        copySelected();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x' && (selectedIdRef.current || selectedIdsRef.current.length > 0)) {
+        e.preventDefault();
+        cutSelected();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+        // handled by the canvas "paste" listener: a picture / SVG from another app becomes a logo,
+        // otherwise the copied layer is pasted (blocking the key here would stop outside images)
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd' && (selectedIdRef.current || selectedIdsRef.current.length > 0)) {
+        e.preventDefault();
+        if (selectedIdRef.current) duplicateElement(selectedIdRef.current);
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedIds.length > 0) {
+        const liveSelectedIds = selectedIdsRef.current;
+        const liveSelectedId = selectedIdRef.current;
+        if (liveSelectedIds.length > 0) {
           e.preventDefault();
-          pushHistory(elements);
-          setElements((prev) => prev.filter((el) => !selectedIds.includes(el.id)));
+          pushHistory(elementsRef.current);
+          setElements((prev) => prev.filter((el) => !liveSelectedIds.includes(el.id)));
           setSelectedId(null);
           setSelectedIds([]);
-        } else if (selectedId) {
+        } else if (liveSelectedId) {
           e.preventDefault();
-          deleteElement(selectedId);
+          deleteElement(liveSelectedId);
         }
-      } else if ((selectedId || selectedIds.length > 0) && (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      } else if ((selectedIdRef.current || selectedIdsRef.current.length > 0) && (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         e.preventDefault();
         const step = e.shiftKey ? 2.0 : 0.5; // 2mm with shift, 0.5mm precision fine nudge
         let dx = 0;
@@ -1113,14 +1641,14 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (e.key === 'ArrowDown') dy = step;
         if (e.key === 'ArrowLeft') dx = -step;
         if (e.key === 'ArrowRight') dx = step;
-        const targets = selectedIds.length > 0 ? selectedIds : [selectedId!];
+        const targets = selectedIdsRef.current.length > 0 ? selectedIdsRef.current : [selectedIdRef.current!];
         targets.forEach((id) => nudgeElement(id, dx, dy));
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedId, undo, redo, deleteElement, duplicateElement, nudgeElement]);
+  }, [undo, redo, selectAll, groupElements, ungroupElements, deleteElement, duplicateElement, copySelected, cutSelected, pasteElement, nudgeElement, pushHistory]);
 
   return (
     <EditorContext.Provider
@@ -1151,11 +1679,14 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         isRightSidebarOpen,
         canUndo: history.length > 0,
         canRedo: redoStack.length > 0,
+        canCopy,
+        canPaste,
         setWidthMm,
         setHeightMm,
         setShape,
         setInkColor,
         setMountPreset,
+        switchCanvasShape,
         setProjectTitle,
         setSelectedId,
         setSelectedIds,
@@ -1163,9 +1694,12 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setPan,
         setLaserInvert,
         setLaserMirror,
+        autoCanvasShape,
+        setAutoCanvasShape,
         setDistressEffect,
         setShowRulers,
         setShowGrid,
+        designLoadKey,
         setSnapToCenter,
         setIsLeftSidebarOpen,
         setIsRightSidebarOpen,
@@ -1175,6 +1709,9 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         updateElement,
         deleteElement,
         duplicateElement,
+        copySelected,
+        cutSelected,
+        pasteElement,
         bringForward,
         sendBackward,
         bringToFront,
@@ -1183,6 +1720,9 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         nudgeElement,
         alignSelected,
         distributeSelected,
+        selectAll,
+        groupElements,
+        ungroupElements,
         undo,
         redo,
         pushHistory,
@@ -1191,10 +1731,12 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         loadAiGeneratedStamp,
         applyAiRefinement,
         saveProjectToCloud,
+        saveAsTemplate,
         resetToBlank,
         // A4 Gang-Sheet Imposition
         viewMode,
         setViewMode,
+        viewRestored: a4Restored,
         a4Instances,
         setA4Instances,
         selectedA4InstanceId,

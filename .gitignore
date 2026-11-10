@@ -43,3 +43,9 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# saved user accounts & projects (contains password hashes)
+backend/data-store/
+
+# local archives
+*.zip

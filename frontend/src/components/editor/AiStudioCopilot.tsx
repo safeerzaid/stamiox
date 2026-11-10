@@ -143,7 +143,7 @@ export const AiStudioCopilot: React.FC = () => {
   const [isTypingReply, setIsTypingReply] = useState<boolean>(false);
   const [lastGeneratedSummary, setLastGeneratedSummary] = useState<string | null>(null);
   const [showQuickSamples, setShowQuickSamples] = useState<boolean>(false);
-  const [selectedLanguage, setSelectedLanguage] = useState<LanguageMode>('ENGLISH');
+  const [selectedLanguage, setSelectedLanguage] = useState<LanguageMode>('AUTO'); // reply in whatever language the user types
   const [showLangMenu, setShowLangMenu] = useState<boolean>(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
@@ -396,7 +396,7 @@ export const AiStudioCopilot: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#fafaf8] select-none">
+    <div className="flex flex-col h-full bg-[#fafaf8] dark:bg-slate-950 select-none">
 
       {/* Messages Area - Scrollable */}
       <div className="flex-1 overflow-y-auto px-3.5 py-2.5 space-y-2 min-h-0">
@@ -407,10 +407,10 @@ export const AiStudioCopilot: React.FC = () => {
               <AiOrbIcon className="w-16 h-16" />
             </div>
             <div>
-              <p className="font-bold text-slate-800 text-base">Clixio AI</p>
-              <p className="text-slate-500 text-xs mt-1.5 leading-relaxed max-w-[220px]">
+              <p className="font-bold text-slate-800 dark:text-slate-100 text-base">Clixio AI</p>
+              <p className="text-slate-500 dark:text-slate-400 text-xs mt-1.5 leading-relaxed max-w-[220px]">
                 Your intelligent stamp CAD assistant.<br/>
-                Describe your stamp or choose from <span className="font-semibold text-indigo-600">+ Presets</span> below!
+                Describe your stamp or choose from <span className="font-semibold text-indigo-600 dark:text-indigo-400">+ Presets</span> below!
               </p>
             </div>
           </div>
@@ -426,7 +426,7 @@ export const AiStudioCopilot: React.FC = () => {
                     {msg.text}
                   </div>
                 ) : (
-                  <div className="max-w-[94%] rounded-2xl rounded-bl-sm px-3 py-2 bg-white border border-slate-200 text-slate-800 text-[12px] leading-relaxed shadow-xs">
+                  <div className="max-w-[94%] rounded-2xl rounded-bl-sm px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-[12px] leading-relaxed shadow-xs">
                     <TypewriterText
                       text={msg.text.replace(/kadeeja/gi, 'Clixio').replace(/euyra/gi, 'Clixio').replace(/inkora/gi, 'Clixio')}
                       isLatest={idx === messages.length - 1 && msg.role === 'assistant'}
@@ -434,8 +434,8 @@ export const AiStudioCopilot: React.FC = () => {
                     />
                     {/* Suggested Follow-ups (Compact & Sleek) */}
                     {msg.suggestedFollowUps && msg.suggestedFollowUps.length > 0 && idx === messages.length - 1 && (
-                      <div className="mt-2 pt-1.5 border-t border-slate-100 flex flex-col gap-1">
-                        <span className="text-[9.5px] font-bold text-slate-400 uppercase tracking-wider pl-0.5 flex items-center gap-1">
+                      <div className="mt-2 pt-1.5 border-t border-slate-100 dark:border-slate-800 flex flex-col gap-1">
+                        <span className="text-[9.5px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider pl-0.5 flex items-center gap-1">
                           <Sparkles className="w-2.5 h-2.5 text-indigo-500" />
                           Suggested Next Steps
                         </span>
@@ -446,17 +446,17 @@ export const AiStudioCopilot: React.FC = () => {
                               type="button"
                               onClick={() => { setPrompt(s); handleGenerate(s); }}
                               disabled={isGenerating}
-                              className="group text-left px-2.5 py-1.5 rounded-lg bg-slate-50/90 hover:bg-indigo-50/70 border border-slate-200/70 hover:border-indigo-300 transition-all duration-150 cursor-pointer flex items-center justify-between gap-2 shadow-2xs hover:shadow-xs"
+                              className="group text-left px-2.5 py-1.5 rounded-lg bg-slate-50/90 dark:bg-slate-800/60 hover:bg-indigo-50/70 dark:hover:bg-indigo-950/40 border border-slate-200/70 dark:border-slate-700 hover:border-indigo-300 transition-all duration-150 cursor-pointer flex items-center justify-between gap-2 shadow-2xs hover:shadow-xs"
                             >
                               <div className="flex items-center gap-2 min-w-0 flex-1">
-                                <div className="w-4 h-4 rounded-md bg-indigo-100/80 text-indigo-600 flex items-center justify-center shrink-0 group-hover:bg-indigo-500 group-hover:text-white transition-colors">
+                                <div className="w-4 h-4 rounded-md bg-indigo-100/80 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 group-hover:bg-indigo-500 group-hover:text-white transition-colors">
                                   <Sparkles className="w-2 h-2" />
                                 </div>
-                                <span className="text-[11px] text-slate-700 font-medium group-hover:text-indigo-950 transition-colors leading-tight truncate">
+                                <span className="text-[11px] text-slate-700 dark:text-slate-200 font-medium group-hover:text-indigo-950 dark:group-hover:text-indigo-200 transition-colors leading-tight truncate">
                                   {s}
                                 </span>
                               </div>
-                              <ArrowUpRight className="w-3 h-3 text-slate-300 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all shrink-0" />
+                              <ArrowUpRight className="w-3 h-3 text-slate-300 dark:text-slate-600 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all shrink-0" />
                             </button>
                           ))}
                         </div>
@@ -468,9 +468,9 @@ export const AiStudioCopilot: React.FC = () => {
             ))}
             {isGenerating && (
               <div className="flex items-start">
-                <div className="px-3.5 py-2.5 bg-white border border-slate-200 rounded-2xl rounded-bl-sm shadow-xs flex items-center gap-2">
+                <div className="px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl rounded-bl-sm shadow-xs flex items-center gap-2">
                   <LiquidAiLoader size={0.45} colorOne="#6366f1" colorTwo="#38bdf8" />
-                  <span className="text-xs text-slate-500 font-medium">Clixio is thinking…</span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Clixio is thinking…</span>
                 </div>
               </div>
             )}
@@ -480,19 +480,19 @@ export const AiStudioCopilot: React.FC = () => {
       </div>
 
       {/* Input Area - Pinned to Bottom */}
-      <div className="shrink-0 border-t border-slate-200 bg-white px-3 py-3 relative">
+      <div className="shrink-0 border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-3 relative">
         {/* Floating Presets Popover Menu - Positioned ABOVE the input */}
         {showQuickSamples && (
-          <div className="absolute bottom-[calc(100%+8px)] left-3 right-3 z-50 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200 shadow-2xl shadow-indigo-500/15 p-3 animate-in fade-in slide-in-from-bottom-2 duration-200">
-            <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
-              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+          <div className="absolute bottom-[calc(100%+8px)] left-3 right-3 z-50 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl shadow-indigo-500/15 p-3 animate-in fade-in slide-in-from-bottom-2 duration-200">
+            <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100 dark:border-slate-800">
+              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
                 Prompt Presets
               </span>
               <button
                 type="button"
                 onClick={() => setShowQuickSamples(false)}
-                className="text-slate-400 hover:text-slate-600 text-xs p-1 rounded-md hover:bg-slate-100 transition-colors cursor-pointer"
+                className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 text-xs p-1 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
               >
                 ✕
               </button>
@@ -511,25 +511,25 @@ export const AiStudioCopilot: React.FC = () => {
                       setShowQuickSamples(false);
                     }}
                     disabled={isGenerating}
-                    className="group text-left p-2 rounded-xl bg-slate-50/80 hover:bg-slate-100 border border-slate-200/70 hover:border-slate-300 transition-all flex items-center gap-2.5 cursor-pointer shadow-2xs"
+                    className="group text-left p-2 rounded-xl bg-slate-50/80 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200/70 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 transition-all flex items-center gap-2.5 cursor-pointer shadow-2xs"
                   >
-                    <div className="p-1.5 rounded-lg bg-white text-slate-600 border border-slate-200/70 shrink-0 group-hover:text-slate-900 transition-colors">
+                    <div className="p-1.5 rounded-lg bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200/70 dark:border-slate-700 shrink-0 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
                       <Icon className="w-3.5 h-3.5" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-1">
-                        <span className="font-bold text-xs text-slate-800 group-hover:text-slate-900 transition-colors">
+                        <span className="font-bold text-xs text-slate-800 dark:text-slate-100 group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
                           {chip.title}
                         </span>
-                        <span className="text-[9px] font-semibold text-slate-500 bg-white px-1.5 py-0.5 rounded border border-slate-200/80">
+                        <span className="text-[9px] font-semibold text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900 px-1.5 py-0.5 rounded border border-slate-200/80 dark:border-slate-700">
                           {chip.badge}
                         </span>
                       </div>
-                      <p className="text-[10.5px] text-slate-400 truncate leading-tight mt-0.5 group-hover:text-slate-600">
+                      <p className="text-[10.5px] text-slate-400 dark:text-slate-500 truncate leading-tight mt-0.5 group-hover:text-slate-600 dark:group-hover:text-slate-300">
                         {chip.desc}
                       </p>
                     </div>
-                    <ArrowUpRight className="w-3.5 h-3.5 text-slate-300 group-hover:text-slate-600 transition-colors shrink-0" />
+                    <ArrowUpRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-600 group-hover:text-slate-600 dark:group-hover:text-slate-300 transition-colors shrink-0" />
                   </button>
                 );
               })}
@@ -540,11 +540,11 @@ export const AiStudioCopilot: React.FC = () => {
         {/* Clear button */}
         {messages.length > 0 && (
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] text-slate-400 font-mono">{messages.length} memory turns</span>
+            <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">{messages.length} memory turns</span>
             <button
               type="button"
               onClick={() => { setMessages([]); setLastGeneratedSummary(null); }}
-              className="flex items-center gap-1 px-2 py-0.5 rounded-md text-slate-400 hover:text-rose-500 hover:bg-rose-50 text-[10px] font-medium transition-colors cursor-pointer"
+              className="flex items-center gap-1 px-2 py-0.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-[10px] font-medium transition-colors cursor-pointer"
             >
               <Trash2 className="w-2.5 h-2.5" />
               Clear
@@ -553,7 +553,7 @@ export const AiStudioCopilot: React.FC = () => {
         )}
 
         {/* Input Box */}
-        <div className="relative bg-white border border-slate-200 rounded-2xl shadow-sm focus-within:border-indigo-400 focus-within:shadow-md focus-within:shadow-indigo-500/10 transition-all">
+        <div className="relative bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-sm focus-within:border-indigo-400 focus-within:shadow-md focus-within:shadow-indigo-500/10 transition-all">
           <textarea
             ref={textareaRef}
             value={prompt}
@@ -568,7 +568,7 @@ export const AiStudioCopilot: React.FC = () => {
                 ? 'Follow up (e.g. make ink red, add stars, change name…)'
                 : 'Describe your stamp to Clixio AI (e.g. 42mm round notary seal)...'
             }
-            className="w-full bg-transparent text-slate-800 placeholder:text-slate-400 font-normal text-sm leading-relaxed outline-none resize-none border-none px-3.5 pt-3 pb-2 focus:ring-0 disabled:opacity-50 rounded-2xl"
+            className="w-full bg-transparent text-slate-800 dark:text-slate-100 placeholder:text-slate-400 font-normal text-sm leading-relaxed outline-none resize-none border-none px-3.5 pt-3 pb-2 focus:ring-0 disabled:opacity-50 rounded-2xl"
           />
           <div className="flex items-center justify-between px-3 pb-2.5">
             <div className="flex items-center gap-1.5">
@@ -581,8 +581,8 @@ export const AiStudioCopilot: React.FC = () => {
                 }}
                 className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-all cursor-pointer ${
                   showQuickSamples
-                    ? 'bg-indigo-100 text-indigo-700 font-semibold'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                    ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 font-semibold'
+                    : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300'
                 }`}
               >
                 <Plus className={`w-3 h-3 transition-transform ${showQuickSamples ? 'rotate-45' : ''}`} />
@@ -598,18 +598,18 @@ export const AiStudioCopilot: React.FC = () => {
                     setShowLangMenu(!showLangMenu);
                     setShowQuickSamples(false);
                   }}
-                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] font-medium transition-all cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/80"
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] font-medium transition-all cursor-pointer bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700"
                   title="Select AI Response Language"
                 >
-                  <Languages className="w-3 h-3 text-slate-500" />
+                  <Languages className="w-3 h-3 text-slate-500 dark:text-slate-400" />
                   <span>{LANGUAGE_OPTIONS.find((l) => l.id === selectedLanguage)?.short || 'Auto'}</span>
-                  <ChevronDown className={`w-2.5 h-2.5 text-slate-400 transition-transform ${showLangMenu ? 'rotate-180' : ''}`} />
+                  <ChevronDown className={`w-2.5 h-2.5 text-slate-400 dark:text-slate-500 transition-transform ${showLangMenu ? 'rotate-180' : ''}`} />
                 </button>
 
                 {/* Language Dropdown Menu */}
                 {showLangMenu && (
-                  <div className="absolute bottom-[calc(100%+6px)] left-0 bg-white border border-slate-200 rounded-xl shadow-xl p-1.5 z-50 flex flex-col gap-0.5 min-w-[170px] animate-in fade-in slide-in-from-bottom-1">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2 py-1">
+                  <div className="absolute bottom-[calc(100%+6px)] left-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl p-1.5 z-50 flex flex-col gap-0.5 min-w-[170px] animate-in fade-in slide-in-from-bottom-1">
+                    <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider px-2 py-1">
                       Response Language
                     </div>
                     {LANGUAGE_OPTIONS.map((lang) => {
@@ -624,15 +624,15 @@ export const AiStudioCopilot: React.FC = () => {
                           }}
                           className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer text-left ${
                             isSelected
-                              ? 'bg-indigo-50 text-indigo-700 font-semibold'
-                              : 'text-slate-700 hover:bg-slate-50'
+                              ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 font-semibold'
+                              : 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
                           }`}
                         >
                           <span className="flex items-center gap-2">
                             <span>{lang.flag}</span>
                             <span>{lang.label}</span>
                           </span>
-                          {isSelected && <Check className="w-3.5 h-3.5 text-indigo-600" />}
+                          {isSelected && <Check className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
                         </button>
                       );
                     })}

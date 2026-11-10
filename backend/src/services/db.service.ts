@@ -1,12 +1,20 @@
 import { STAMP_TEMPLATES, StampTemplateSeed } from '../data/templates';
 import { CLIPARTS, ClipartSeed } from '../data/cliparts';
 import bcrypt from 'bcryptjs';
+import fs from 'fs';
+import path from 'path';
+
+// Users, subscriptions and projects are written to this file so accounts survive a restart
+const STORE_FILE = path.resolve(__dirname, '../../data-store/db.json');
 
 export interface UserEntity {
   id: string;
   email: string;
   passwordHash: string;
   name: string;
+  /** login by mobile number (10 digits) or username */
+  mobile?: string;
+  username?: string;
   company?: string;
   role: string;
   createdAt: Date;
@@ -55,6 +63,45 @@ class DatabaseService {
 
   constructor() {
     this.initSeedData();
+    this.loadStore();
+  }
+
+  // ── persistence ──
+  private saveTimer: NodeJS.Timeout | null = null;
+  private loadStore() {
+    try {
+      if (!fs.existsSync(STORE_FILE)) return;
+      const raw = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'));
+      const revive = (o: any) => {
+        for (const k of Object.keys(o)) if (/(Date|At|Start|End)$/.test(k) && typeof o[k] === 'string') o[k] = new Date(o[k]);
+        return o;
+      };
+      (raw.users || []).forEach((u: any) => {
+        if (u.mobile && /^\d{10}$/.test(u.mobile)) u.mobile = '+91' + u.mobile; // older accounts: India
+        this.users.set(u.id, revive(u));
+      });
+      (raw.subscriptions || []).forEach((s: any) => this.subscriptions.set(s.userId, revive(s)));
+      (raw.projects || []).forEach((p: any) => this.projects.set(p.id, revive(p)));
+    } catch (e) {
+      console.warn('Could not read saved data store:', e);
+    }
+  }
+  private scheduleSave() {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => {
+      try {
+        fs.mkdirSync(path.dirname(STORE_FILE), { recursive: true });
+        const data = {
+          users: Array.from(this.users.values()),
+          subscriptions: Array.from(this.subscriptions.values()),
+          projects: Array.from(this.projects.values()),
+        };
+        fs.writeFileSync(STORE_FILE + '.tmp', JSON.stringify(data, null, 2));
+        fs.renameSync(STORE_FILE + '.tmp', STORE_FILE);
+      } catch (e) {
+        console.error('Could not save data store:', e);
+      }
+    }, 200);
   }
 
   private initSeedData() {
@@ -126,11 +173,28 @@ class DatabaseService {
     return null;
   }
 
+  async findUserByMobile(mobile: string): Promise<UserEntity | null> {
+    for (const user of this.users.values()) if (user.mobile && user.mobile === mobile) return user;
+    return null;
+  }
+
+  /** local digits without the country code — only if exactly one account matches */
+  async findUserByLocalMobile(digits: string): Promise<UserEntity | null> {
+    const hits = Array.from(this.users.values()).filter((u) => u.mobile && u.mobile.endsWith(digits));
+    return hits.length === 1 ? hits[0] : null;
+  }
+
+  async findUserByUsername(username: string): Promise<UserEntity | null> {
+    const u = username.toLowerCase();
+    for (const user of this.users.values()) if (user.username && user.username.toLowerCase() === u) return user;
+    return null;
+  }
+
   async findUserById(id: string): Promise<UserEntity | null> {
     return this.users.get(id) || null;
   }
 
-  async createUser(data: { email: string; passwordHash: string; name: string; company?: string }): Promise<UserEntity> {
+  async createUser(data: { email: string; passwordHash: string; name: string; company?: string; mobile?: string; username?: string }): Promise<UserEntity> {
     const id = 'user_' + Math.random().toString(36).substring(2, 11);
     const now = new Date();
     const newUser: UserEntity = {
@@ -139,6 +203,8 @@ class DatabaseService {
       passwordHash: data.passwordHash,
       name: data.name,
       company: data.company,
+      mobile: data.mobile,
+      username: data.username,
       role: 'USER',
       createdAt: now,
       updatedAt: now,
@@ -161,6 +227,7 @@ class DatabaseService {
       updatedAt: now,
     };
     this.subscriptions.set(id, subscription);
+    this.scheduleSave();
 
     return newUser;
   }
@@ -175,6 +242,7 @@ class DatabaseService {
     if (!sub) return null;
     const updated = { ...sub, ...update, updatedAt: new Date() };
     this.subscriptions.set(userId, updated);
+    this.scheduleSave();
     return updated;
   }
 
@@ -219,6 +287,7 @@ class DatabaseService {
       updatedAt: now,
     };
     this.projects.set(id, newProject);
+    this.scheduleSave();
     return newProject;
   }
 
@@ -227,13 +296,16 @@ class DatabaseService {
     if (!proj) return null;
     const updated = { ...proj, ...update, updatedAt: new Date() };
     this.projects.set(id, updated);
+    this.scheduleSave();
     return updated;
   }
 
   async deleteProject(id: string, userId: string): Promise<boolean> {
     const proj = this.projects.get(id);
     if (!proj || proj.userId !== userId) return false;
-    return this.projects.delete(id);
+    const ok = this.projects.delete(id);
+    if (ok) this.scheduleSave();
+    return ok;
   }
 
   // --- Cliparts ---

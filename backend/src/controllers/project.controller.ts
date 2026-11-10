@@ -59,6 +59,7 @@ export const createProject = async (req: AuthRequest, res: Response) => {
       elementsJson = [],
       thumbnailSvg,
       isPublic = false,
+      isTemplate = false,
     } = req.body;
 
     if (!title) {
@@ -76,7 +77,7 @@ export const createProject = async (req: AuthRequest, res: Response) => {
       inkColor,
       elementsJson,
       thumbnailSvg,
-      isTemplate: false,
+      isTemplate: Boolean(isTemplate), // saved as a personal template
       isPublic: Boolean(isPublic),
     });
 
@@ -107,7 +108,11 @@ export const updateProject = async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ success: false, message: 'You can only update your own projects' });
     }
 
-    const updated = await db.updateProject(id, req.body);
+    // only design fields can change — never the owner, id or dates
+    const allowed = ['title', 'description', 'category', 'shape', 'widthMm', 'heightMm', 'inkColor', 'elementsJson', 'thumbnailSvg', 'isTemplate'] as const;
+    const patch: Record<string, any> = {};
+    for (const k of allowed) if (req.body[k] !== undefined) patch[k] = req.body[k];
+    const updated = await db.updateProject(id, patch);
     return res.json({
       success: true,
       message: 'Project updated successfully',
