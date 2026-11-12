@@ -206,6 +206,8 @@ export interface UserProfile {
   id: string;
   email: string;
   name: string;
+  username?: string;
+  mobile?: string;
   company?: string;
   role: string;
 }

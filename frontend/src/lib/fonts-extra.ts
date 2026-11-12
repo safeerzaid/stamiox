@@ -15,6 +15,7 @@ const FALLBACK: Record<Cat, string> = {
   mono: 'monospace',
   vintage: 'serif',
   indian: 'sans-serif',
+  custom: 'sans-serif',
 };
 
 // [category, tag shown in the picker, font names]

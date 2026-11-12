@@ -166,7 +166,7 @@ export interface FontOption {
   name: string;
   value: string;
   family: string;
-  category: 'sans' | 'serif' | 'bold' | 'script' | 'mono' | 'vintage' | 'indian';
+  category: 'sans' | 'serif' | 'bold' | 'script' | 'mono' | 'vintage' | 'indian' | 'custom';
   tag: string;
 }
 

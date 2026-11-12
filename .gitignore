@@ -45,4 +45,8 @@ Thumbs.db
 *.sw?
 
 # Archives
+# saved user accounts & projects (contains password hashes)
+backend/data-store/
+
+# local archives
 *.zip

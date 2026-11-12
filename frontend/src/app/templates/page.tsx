@@ -7,6 +7,7 @@ import { playOpenTransition, playPreviewTransition } from '../../lib/open-transi
 import { generateStampSvg } from '../../lib/svg-generator';
 import { FEATURED_TEMPLATE_IDS as FEATURED_IDS, designScore } from '../../lib/template-ranking';
 import { TemplateCard } from '../../components/templates/TemplateCard';
+import { useFavouriteTemplates } from '../../lib/favourite-templates';
 import { QuickCustomizerModal } from '../../components/templates/QuickCustomizerModal';
 import { TemplateFullscreenModal } from '../../components/templates/TemplateFullscreenModal';
 import { useEditor } from '../../context/EditorContext';
@@ -22,12 +23,14 @@ import {
   Award,
   Sparkles,
   Layers,
+  Star,
 } from 'lucide-react';
 
 
 function TemplatesContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { favouriteIds, isFavourite, toggleFavourite } = useFavouriteTemplates();
   const { loadTemplate } = useEditor();
 
   const [templates] = useState<StampTemplate[]>(STAMP_TEMPLATES as any);
@@ -109,6 +112,7 @@ function TemplatesContent() {
   const filteredTemplates = templates.filter((t) => {
     const matchesCat =
       selectedCategory === 'all' ||
+      (selectedCategory === 'favourites' && isFavourite(t.id)) ||
       t.category.toLowerCase() === selectedCategory.toLowerCase();
     const matchesShape =
       selectedShape === 'all' ||
@@ -207,6 +211,18 @@ function TemplatesContent() {
 
         {/* Category Pills Bar */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+          <button
+            onClick={() => handleCategoryChange('favourites')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
+              selectedCategory === 'favourites'
+                ? 'bg-amber-500 text-white shadow-xs'
+                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-amber-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 shadow-2xs'
+            }`}
+          >
+            <Star className={`w-3.5 h-3.5 ${selectedCategory === 'favourites' ? 'fill-white' : 'text-amber-500 fill-amber-400'}`} />
+            <span>Favourites</span>
+            {favouriteIds.length > 0 && <span className="tabular-nums opacity-70">{favouriteIds.length}</span>}
+          </button>
           {categories.map((cat) => {
             const isSelected = selectedCategory === cat.id;
 
@@ -269,6 +285,8 @@ function TemplatesContent() {
                 <TemplateCard
                   key={`featured-${tpl.id}`}
                   template={tpl}
+                  isFavourite={isFavourite(tpl.id)}
+                  onToggleFavourite={(t) => toggleFavourite(t.id)}
                   onPreview={handlePreviewTemplate}
                   onQuickCustomize={handleQuickCustomize}
                   onOpenInStudio={handleOpenInStudio}
@@ -285,10 +303,19 @@ function TemplatesContent() {
         {filteredTemplates.length === 0 ? (
           <div className="py-20 text-center space-y-3 bg-white rounded-3xl border border-slate-200 shadow-2xs">
             <LayoutGrid className="w-10 h-10 text-slate-300 mx-auto" />
-            <h3 className="text-base font-bold text-slate-800">No matching templates found</h3>
-            <p className="text-xs text-slate-400">
-              Try adjusting your search query or shape filter.
-            </p>
+            {selectedCategory === 'favourites' && favouriteIds.length === 0 ? (
+              <>
+                <h3 className="text-base font-bold text-slate-800">No favourites yet</h3>
+                <p className="text-xs text-slate-400">Tap the ☆ on any template to keep it here for quick access.</p>
+              </>
+            ) : (
+              <>
+                <h3 className="text-base font-bold text-slate-800">No matching templates found</h3>
+                <p className="text-xs text-slate-400">
+                  Try adjusting your search query or shape filter.
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-6">
@@ -296,6 +323,8 @@ function TemplatesContent() {
               <TemplateCard
                 key={tpl.id}
                 template={tpl}
+                isFavourite={isFavourite(tpl.id)}
+                onToggleFavourite={(t) => toggleFavourite(t.id)}
                 onPreview={handlePreviewTemplate}
                 onQuickCustomize={handleQuickCustomize}
                 onOpenInStudio={handleOpenInStudio}

@@ -581,21 +581,9 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
     });
     setMultiInitialPos(posMap);
 
-    if (el.type === 'arc-text' && currentSelection.length === 1) {
-      const arc = el as ArcTextElement;
-      const startAngleRad = Math.atan2(posMm.y - arc.cy, posMm.x - arc.cx);
-      const startDist = Math.hypot(posMm.x - arc.cx, posMm.y - arc.cy);
-      setIsSlidingArc(true);
-      setSlidingArcData({
-        id: arc.id,
-        cx: arc.cx,
-        cy: arc.cy,
-        startAngleRad,
-        initialOffset: arc.angleOffset || 0,
-        startDist,
-        initialRadius: arc.radius || 15,
-      });
-    } else {
+    // dragging curved text by its letters moves it like any other layer;
+    // the small dot on the curve slides it along the circle
+    {
       setIsSlidingArc(false);
       setSlidingArcData(null);
     }
@@ -945,7 +933,9 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
         movingIds.forEach((id) => {
           const el = elements.find((e) => e.id === id);
           if (!el) return;
-          const b = getElementBounds(el, widthMm, heightMm);
+          // circular things snap by their circle centre (so curved text can go back onto the stamp centre)
+          const circ = el.type === 'arc-text' || el.type === 'ring' || el.type === 'serrated-ring' || el.type === 'oval';
+          const b = circ ? { minX: (el as any).cx, maxX: (el as any).cx, minY: (el as any).cy, maxY: (el as any).cy } : getElementBounds(el, widthMm, heightMm);
           const isLn = el.type === 'line';
           const refX = isLn ? ((el as any).x1 + (el as any).x2) / 2 : (el as any).cx ?? (el as any).x ?? 0;
           const refY = isLn ? ((el as any).y1 + (el as any).y2) / 2 : (el as any).cy ?? (el as any).y ?? 0;
@@ -1307,6 +1297,11 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
   // Logo upload → 1-bit ink silhouette, centered in the stamp
   const logoInputRef = useRef<HTMLInputElement>(null);
   const [logoError, setLogoError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!logoError) return;
+    const t = window.setTimeout(() => setLogoError(null), logoError === '__figma__' ? 15000 : 8000);
+    return () => window.clearTimeout(t);
+  }, [logoError]);
   // A QR code is uploaded the same way, traced crisp (no smoothing) and named so it is easy to find
   const qrInputRef = useRef<HTMLInputElement>(null);
   const handleLogoFile = async (file?: File | null, kind: 'logo' | 'qr' = 'logo') => {
@@ -1330,6 +1325,118 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
     } catch (err: any) {
       setLogoError(err?.message || 'Could not load that image.');
     }
+  };
+
+  // ── Ctrl+V: a logo copied from another file / app is pasted straight onto the stamp ──
+  //    image on the clipboard → logo · SVG code → logo · otherwise the layer copied in the editor
+  const pasteHandlerRef = useRef<(e: ClipboardEvent) => void>(() => {});
+  pasteHandlerRef.current = (e: ClipboardEvent) => {
+    const data = e.clipboardData;
+    if (!data) return;
+    const types = Array.from(data.types || []);
+    const image = Array.from(data.items).find((it) => it.kind === 'file' && it.type.startsWith('image/'));
+    const file = image?.getAsFile();
+    const plain = data.getData('text/plain') || '';
+
+    // typing in a field: let normal text paste through — but a picture can't go into a text box,
+    // so a clipboard that holds only an image still becomes a logo
+    const t = (document.activeElement || e.target) as HTMLElement | null;
+    const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+    if (typing && !(file && !plain.trim())) return;
+
+    // 1. a real picture (Figma "Copy as PNG", screenshots, Paint/Photoshop, "Copy image" in a browser)
+    if (file) {
+      e.preventDefault();
+      const named = file.name && file.name !== 'image.png' ? file : new File([file], `pasted-logo.${(file.type.split('/')[1] || 'png').replace('svg+xml', 'svg')}`, { type: file.type });
+      handleLogoFile(named);
+      return;
+    }
+
+    // 2. SVG code (Figma "Copy as SVG", Illustrator / Inkscape / code editors)
+    const svgFrom = (s: string) => {
+      const m = s.match(/<svg[\s>][\s\S]*?<\/svg>/i);
+      return m ? m[0] : null;
+    };
+    const text = data.getData('text/plain')?.trim() || '';
+    const html = types.includes('text/html') ? data.getData('text/html') : '';
+    const svg = (text.startsWith('<') && svgFrom(text)) || (html && svgFrom(html));
+    if (svg) {
+      e.preventDefault();
+      handleLogoFile(new File([svg.includes('xmlns=') ? svg : svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"')], 'pasted-logo.svg', { type: 'image/svg+xml' }));
+      return;
+    }
+
+    // 3. a picture inside copied web / document content (<img src="data:…"> or a link to an image)
+    const imgSrc = html && html.match(/<img[^>]+src=["']([^"']+)["']/i)?.[1];
+    if (imgSrc && !/figma/i.test(html)) {
+      e.preventDefault();
+      (async () => {
+        try {
+          const res = await fetch(imgSrc);
+          const blob = await res.blob();
+          if (!blob.type.startsWith('image/')) throw new Error('not an image');
+          handleLogoFile(new File([blob], `pasted-logo.${(blob.type.split('/')[1] || 'png').replace('svg+xml', 'svg')}`, { type: blob.type }));
+        } catch {
+          setLogoError('Could not read that picture — copy the image itself, or save it and use Logo.');
+        }
+      })();
+      return;
+    }
+
+    // 4. Figma's own copy format: only Figma can read it — say how to copy so it works here
+    if (/figmeta|\(figma\)|data-metadata|data-buffer/i.test(html)) {
+      e.preventDefault();
+      setLogoError('__figma__');
+      return;
+    }
+
+    // 5. a layer copied inside the editor
+    if (canPaste) {
+      e.preventDefault();
+      pasteElement();
+      return;
+    }
+
+    // something was pasted, but nothing usable for a stamp — say what the clipboard held
+    if (types.length) {
+      e.preventDefault();
+      setLogoError(
+        `No logo found in what you copied (${types.join(', ') || 'empty'}). Copy the logo as a PNG image or as SVG, then paste again.`
+      );
+    }
+  };
+  useEffect(() => {
+    // capture phase on the document: we see the paste before anything else on the page can stop it
+    const onPaste = (e: ClipboardEvent) => pasteHandlerRef.current(e);
+    document.addEventListener('paste', onPaste, true);
+    return () => document.removeEventListener('paste', onPaste, true);
+  }, []);
+
+  /** Right-click → Paste: read the system clipboard directly (images / SVG become a logo). */
+  const pasteFromSystemClipboard = async (): Promise<boolean> => {
+    try {
+      const items = await (navigator.clipboard as any)?.read?.();
+      if (!items) return false;
+      for (const item of items) {
+        const imgType = item.types.find((ty: string) => ty.startsWith('image/'));
+        if (imgType) {
+          const blob = await item.getType(imgType);
+          handleLogoFile(new File([blob], `pasted-logo.${(imgType.split('/')[1] || 'png').replace('svg+xml', 'svg')}`, { type: imgType }));
+          return true;
+        }
+        if (item.types.includes('text/plain')) {
+          const txt = await (await item.getType('text/plain')).text();
+          const m = txt.match(/<svg[\s>][\s\S]*?<\/svg>/i);
+          if (m) {
+            handleLogoFile(new File([m[0].includes('xmlns=') ? m[0] : m[0].replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"')], 'pasted-logo.svg', { type: 'image/svg+xml' }));
+            return true;
+          }
+        }
+      }
+    } catch {
+      /* permission denied / not supported — fall back to the layer clipboard */
+    }
+    return false;
   };
 
   return (
@@ -1940,7 +2047,9 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
                             stroke="none"
                             className="cursor-grab active:cursor-grabbing select-none"
                             onPointerDown={(e) => handleArcKnobPointerDown(e, arc)}
-                          />
+                          >
+                            <title>Drag to slide the text along the circle</title>
+                          </circle>
                           {/* Small Minimal Dot at Text Apex */}
                           <circle
                             cx={apexPt.x}
@@ -2507,13 +2616,26 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
                     e.target.value = '';
                   }}
                 />
-                {logoError && (
+                {logoError === '__figma__' ? (
+                  <div role="status" className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-[330px] whitespace-normal text-left rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-xl p-3 animate-in fade-in zoom-in-95 duration-300">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-[13px] font-semibold text-slate-800 dark:text-slate-100">Paste from Figma</p>
+                      <button onClick={() => setLogoError(null)} aria-label="Close" className="shrink-0 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors">✕</button>
+                    </div>
+                    <p className="mt-0.5 text-[12px] leading-snug text-slate-500 dark:text-slate-400">Figma's normal copy can only be pasted inside Figma. Copy it as an image instead:</p>
+                    <ol className="mt-2 space-y-1.5 text-[12px] text-slate-700 dark:text-slate-200">
+                      <li className="flex items-center gap-2 flex-wrap"><span className="h-5 w-5 rounded-full bg-[#e5f2ff] dark:bg-blue-950/60 text-[#0d99ff] text-[11px] font-bold flex items-center justify-center shrink-0">1</span>Select the logo in Figma, press <kbd className="px-1.5 py-0.5 rounded-md border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 text-[11px] font-semibold">Ctrl+Shift+C</kbd></li>
+                      <li className="flex items-center gap-2 flex-wrap"><span className="h-5 w-5 rounded-full bg-[#e5f2ff] dark:bg-blue-950/60 text-[#0d99ff] text-[11px] font-bold flex items-center justify-center shrink-0">2</span>Come back here and press <kbd className="px-1.5 py-0.5 rounded-md border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 text-[11px] font-semibold">Ctrl+V</kbd></li>
+                    </ol>
+                    <p className="mt-2 text-[11px] text-slate-400">For a sharp vector logo: right-click → Copy/Paste as → Copy as SVG.</p>
+                  </div>
+                ) : logoError && (
                   <div
                     role="alert"
-                    className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-rose-600 text-white text-[12px] px-3 py-1.5 shadow-lg flex items-center gap-2 animate-in fade-in zoom-in-95 duration-300"
+                    className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-[340px] whitespace-normal text-left rounded-lg bg-rose-600 text-white text-[12px] leading-snug px-3 py-2 shadow-lg flex items-start gap-2 animate-in fade-in zoom-in-95 duration-300"
                   >
                     {logoError}
-                    <button onClick={() => setLogoError(null)} className="text-white/80 hover:text-white transition-colors">✕</button>
+                    <button onClick={() => setLogoError(null)} aria-label="Close" className="shrink-0 text-white/80 hover:text-white transition-colors">✕</button>
                   </div>
                 )}
                 <div className="h-5 w-px bg-slate-200 mx-1 shrink-0" />
@@ -2613,8 +2735,13 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
 
           <button
             type="button"
-            onClick={() => { pasteElement({ x: mousePosMm.x, y: mousePosMm.y }); setContextMenu(null); }}
-            disabled={!canPaste}
+            onClick={async () => {
+              const pos = { x: mousePosMm.x, y: mousePosMm.y };
+              setContextMenu(null);
+              if (await pasteFromSystemClipboard()) return;
+              if (canPaste) pasteElement(pos);
+              else setLogoError('Clipboard has no logo — copy the logo as a PNG image or SVG first.');
+            }}
             className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-35 disabled:pointer-events-none transition-colors cursor-pointer"
           >
             <div className="flex items-center gap-2">

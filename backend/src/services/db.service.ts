@@ -8,6 +8,9 @@ export interface UserEntity {
   email: string;
   passwordHash: string;
   name: string;
+  /** login by mobile number (10 digits) or username */
+  mobile?: string;
+  username?: string;
   company?: string;
   role: string;
   createdAt: Date;
@@ -59,7 +62,12 @@ const PROJECT_FIELDS = [
 const prisma = new PrismaClient();
 
 // Prisma returns null for empty optional columns; the API used to send undefined.
-const toUser = (u: any): UserEntity => ({ ...u, company: u.company ?? undefined });
+const toUser = (u: any): UserEntity => ({
+  ...u,
+  company: u.company ?? undefined,
+  mobile: u.mobile ?? undefined,
+  username: u.username ?? undefined,
+});
 const toProject = (p: any): StampProjectEntity => ({
   ...p,
   description: p.description ?? undefined,
@@ -164,12 +172,30 @@ class DatabaseService {
     return user ? toUser(user) : null;
   }
 
+  async findUserByMobile(mobile: string): Promise<UserEntity | null> {
+    const user = await prisma.user.findFirst({ where: { mobile } });
+    return user ? toUser(user) : null;
+  }
+
+  /** local digits without the country code — only if exactly one account matches */
+  async findUserByLocalMobile(digits: string): Promise<UserEntity | null> {
+    const hits = await prisma.user.findMany({ where: { mobile: { endsWith: digits } }, take: 2 });
+    return hits.length === 1 ? toUser(hits[0]) : null;
+  }
+
+  async findUserByUsername(username: string): Promise<UserEntity | null> {
+    const user = await prisma.user.findFirst({
+      where: { username: { equals: username, mode: 'insensitive' } },
+    });
+    return user ? toUser(user) : null;
+  }
+
   async findUserById(id: string): Promise<UserEntity | null> {
     const user = await prisma.user.findUnique({ where: { id } });
     return user ? toUser(user) : null;
   }
 
-  async createUser(data: { email: string; passwordHash: string; name: string; company?: string }): Promise<UserEntity> {
+  async createUser(data: { email: string; passwordHash: string; name: string; company?: string; mobile?: string; username?: string }): Promise<UserEntity> {
     // Every new user gets the 3-month free trial.
     const user = await prisma.user.create({
       data: {
@@ -177,6 +203,8 @@ class DatabaseService {
         passwordHash: data.passwordHash,
         name: data.name,
         company: data.company,
+        mobile: data.mobile,
+        username: data.username,
         role: 'USER',
         subscription: { create: newTrial(new Date()) },
       },

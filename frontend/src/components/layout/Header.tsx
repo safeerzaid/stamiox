@@ -158,7 +158,8 @@ export const Header: React.FC = () => {
   }, []);
 
   // Hide global header on full-screen Studio editor page
-  if (pathname === '/editor') {
+  // full-screen pages: Studio and the sign-in page
+  if (pathname === '/editor' || pathname === '/login') {
     return null;
   }
 

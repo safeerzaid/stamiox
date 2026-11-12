@@ -196,7 +196,7 @@ export const QuickCustomizerModal: React.FC<QuickCustomizerModalProps> = ({
             </span>
 
             <div
-              className="w-56 h-56 flex items-center justify-center drop-shadow-lg"
+              className="ink-preview w-56 h-56 flex items-center justify-center drop-shadow-lg"
               dangerouslySetInnerHTML={{ __html: svgPreview }}
             />
 

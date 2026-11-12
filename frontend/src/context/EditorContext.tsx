@@ -137,6 +137,8 @@ interface EditorContextType {
     heightMm?: number;
   }) => void;
   saveProjectToCloud: () => Promise<string | null>;
+  /** Save the current design to the account as a reusable template (always a new copy). */
+  saveAsTemplate: (title: string) => Promise<boolean>;
   resetToBlank: (shape?: StampShapeType, width?: number, height?: number) => void;
 
   // A4 Multi-Stamp Gang-Sheet Imposition
@@ -1005,6 +1007,10 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         sessionStorage.setItem('stamiox_clipboard', JSON.stringify(cloned));
       }
     } catch {}
+    // also claim the system clipboard, so a picture copied earlier elsewhere isn't pasted instead
+    try {
+      navigator.clipboard?.writeText?.('[Stamiox layer]').catch(() => {});
+    } catch {}
   }, []);
 
   const cutSelected = useCallback(() => {
@@ -1507,15 +1513,24 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const saveProjectToCloud = async (): Promise<string | null> => {
     setIsSaving(true);
     try {
+      let updated = false;
       if (projectId) {
-        await ApiService.updateProject(projectId, {
-          title: projectTitle,
-          shape,
-          widthMm,
-          heightMm,
-          inkColor,
-          elementsJson: elements,
-        });
+        try {
+          await ApiService.updateProject(projectId, {
+            title: projectTitle,
+            shape,
+            widthMm,
+            heightMm,
+            inkColor,
+            elementsJson: elements,
+          });
+          updated = true;
+        } catch {
+          // the remembered design is gone or belongs to another account → save as a new design
+          setProjectId(null);
+        }
+      }
+      if (updated) {
         setHasUnsavedChanges(false);
         return projectId;
       } else {
@@ -1539,6 +1554,24 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return null;
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const saveAsTemplate = async (title: string): Promise<boolean> => {
+    try {
+      const res = await ApiService.createProject({
+        title: title.trim() || projectTitle,
+        shape,
+        widthMm,
+        heightMm,
+        inkColor,
+        elementsJson: elements,
+        isTemplate: true,
+      });
+      return !!res.success;
+    } catch (err) {
+      console.error('Save template error:', err);
+      return false;
     }
   };
 
@@ -1580,9 +1613,9 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x' && (selectedIdRef.current || selectedIdsRef.current.length > 0)) {
         e.preventDefault();
         cutSelected();
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && clipboardRef.current.length > 0) {
-        e.preventDefault();
-        pasteElement();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+        // handled by the canvas "paste" listener: a picture / SVG from another app becomes a logo,
+        // otherwise the copied layer is pasted (blocking the key here would stop outside images)
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd' && (selectedIdRef.current || selectedIdsRef.current.length > 0)) {
         e.preventDefault();
         if (selectedIdRef.current) duplicateElement(selectedIdRef.current);
@@ -1698,6 +1731,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         loadAiGeneratedStamp,
         applyAiRefinement,
         saveProjectToCloud,
+        saveAsTemplate,
         resetToBlank,
         // A4 Gang-Sheet Imposition
         viewMode,

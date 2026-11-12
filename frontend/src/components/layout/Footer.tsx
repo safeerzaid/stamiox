@@ -9,7 +9,8 @@ import { ExpandingCtaBanner } from '../landing/ExpandingCtaBanner';
 export const Footer: React.FC = () => {
   const pathname = usePathname();
 
-  if (pathname === '/editor') {
+  // full-screen pages: Studio and the sign-in page
+  if (pathname === '/editor' || pathname === '/login') {
     return null;
   }
 

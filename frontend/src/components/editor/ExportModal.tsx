@@ -5,6 +5,7 @@ import { useEditor } from '../../context/EditorContext';
 import { generateStampSvg } from '../../lib/svg-generator';
 import { MM_TO_PX } from '../../lib/units';
 import { jsPDF } from 'jspdf';
+import { embedFontsInSvg } from '../../lib/font-embed';
 import {
   X,
   Download,
@@ -55,6 +56,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, onOpe
 
   // Helper: Generate high-resolution PNG Blob (300 DPI)
   const generatePngBlob = async (): Promise<Blob | null> => {
+    // fonts must be inside the SVG — an SVG drawn as an image can't use the page's fonts
+    const svgWithFonts = await embedFontsInSvg(svgContent, elements as any);
     return new Promise((resolve) => {
       const canvas = document.createElement('canvas');
       const scaleFactor = 4; // ~300 DPI high-res
@@ -64,7 +67,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, onOpe
       if (!ctx) return resolve(null);
 
       const img = new Image();
-      const svgBlob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+      const svgBlob = new Blob([svgWithFonts], { type: 'image/svg+xml;charset=utf-8' });
       const url = URL.createObjectURL(svgBlob);
 
       img.onload = () => {
@@ -89,8 +92,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, onOpe
   };
 
   // 1. Direct 1:1 Physical Scale Print Sheet
-  const handlePrint = () => {
+  const handlePrint = async () => {
     setExportingKey('print');
+    const svgWithFonts = await embedFontsInSvg(svgContent, elements as any);
     const printHtml = `
       <!DOCTYPE html>
       <html>
@@ -195,7 +199,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, onOpe
               1:1 Actual Physical Scale (${widthMm} × ${heightMm} mm)
             </div>
             <div class="stamp-svg-wrapper">
-              ${svgContent}
+              ${svgWithFonts}
             </div>
           </div>
 
@@ -259,9 +263,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, onOpe
   };
 
   // 2. Download SVG Vector
-  const handleExportSvg = () => {
+  const handleExportSvg = async () => {
     setExportingKey('svg');
-    const blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+    const svgWithFonts = await embedFontsInSvg(svgContent, elements as any);
+    const blob = new Blob([svgWithFonts], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -274,8 +279,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, onOpe
   };
 
   // 3. Download Vector PDF in mm
-  const handleExportPdf = () => {
+  const handleExportPdf = async () => {
     setExportingKey('pdf');
+    const svgWithFonts = await embedFontsInSvg(svgContent, elements as any);
     try {
       const orientation = widthMm >= heightMm ? 'landscape' : 'portrait';
       const doc = new jsPDF({
@@ -292,7 +298,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, onOpe
 
       if (ctx) {
         const img = new Image();
-        const svgBlob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+        const svgBlob = new Blob([svgWithFonts], { type: 'image/svg+xml;charset=utf-8' });
         const url = URL.createObjectURL(svgBlob);
 
         img.onload = () => {
@@ -518,7 +524,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, onOpe
                 onClose();
                 onOpenARModal();
               }}
-              className="w-full h-8.5 rounded-xl border border-blue-200/80 dark:border-blue-900/60 bg-blue-50/60 dark:bg-blue-950/40 hover:bg-blue-100/70 text-[#0d99ff] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              className="w-full h-9 rounded-xl border border-blue-200/80 dark:border-blue-900/60 bg-blue-50/60 dark:bg-blue-950/40 hover:bg-blue-100/70 text-[#0d99ff] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             >
               <Camera className="w-3.5 h-3.5" />
               <span>Real-World AR Camera Preview</span>

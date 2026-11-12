@@ -3,13 +3,15 @@
 import React from 'react';
 import { StampTemplate } from '../../types/stamp';
 import { generateStampSvg } from '../../lib/svg-generator';
-import { Edit3, Layers, Sparkles, Maximize2, Compass } from 'lucide-react';
+import { Edit3, Layers, Sparkles, Maximize2, Compass, Star } from 'lucide-react';
 
 interface TemplateCardProps {
   template: StampTemplate;
   onPreview?: (template: StampTemplate) => void;
   onQuickCustomize: (template: StampTemplate) => void;
   onOpenInStudio: (template: StampTemplate) => void;
+  isFavourite?: boolean;
+  onToggleFavourite?: (template: StampTemplate) => void;
 }
 
 export const TemplateCard: React.FC<TemplateCardProps> = ({
@@ -17,6 +19,8 @@ export const TemplateCard: React.FC<TemplateCardProps> = ({
   onPreview,
   onQuickCustomize,
   onOpenInStudio,
+  isFavourite = false,
+  onToggleFavourite,
 }) => {
   const svgPreview = generateStampSvg({
     widthMm: template.widthMm,
@@ -52,8 +56,27 @@ export const TemplateCard: React.FC<TemplateCardProps> = ({
           </span>
         </div>
 
+        {/* Favourite star — always visible once starred */}
+        {onToggleFavourite && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFavourite(template);
+            }}
+            aria-pressed={isFavourite}
+            aria-label={isFavourite ? `Remove ${template.title} from favourites` : `Add ${template.title} to favourites`}
+            title={isFavourite ? 'Remove from favourites' : 'Add to favourites'}
+            className={`absolute top-3 right-3 z-20 w-8 h-8 rounded-xl bg-white/95 dark:bg-slate-900/95 border border-slate-200/80 dark:border-slate-700 shadow-2xs flex items-center justify-center transition-all duration-200 cursor-pointer active:scale-90 ${
+              isFavourite ? 'opacity-100 text-amber-500' : 'opacity-0 group-hover:opacity-100 focus:opacity-100 text-slate-400 hover:text-amber-500'
+            }`}
+          >
+            <Star className={`w-4 h-4 ${isFavourite ? 'fill-amber-400' : ''}`} />
+          </button>
+        )}
+
         {/* Fullscreen Preview Hover Button */}
-        <div className="absolute top-3.5 right-3.5 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+        <div className={`absolute top-3.5 ${onToggleFavourite ? 'right-[3.25rem]' : 'right-3.5'} opacity-0 group-hover:opacity-100 transition-opacity z-10`}>
           <span className="p-1.5 rounded-xl bg-slate-900 text-white shadow-md flex items-center gap-1 text-[10px] font-bold">
             <Maximize2 className="w-3.5 h-3.5" />
           </span>
@@ -62,7 +85,7 @@ export const TemplateCard: React.FC<TemplateCardProps> = ({
         {/* Vector SVG Output */}
         <div
           data-template-preview={template.id}
-          className="w-full h-36 flex items-center justify-center p-2 transform group-hover:scale-105 transition-transform duration-300 drop-shadow-xs [&>svg]:w-auto [&>svg]:h-auto [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:mx-auto [&>svg]:my-auto"
+          className="ink-preview w-full h-36 flex items-center justify-center p-2 transform group-hover:scale-105 transition-transform duration-300 drop-shadow-xs [&>svg]:w-auto [&>svg]:h-auto [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:mx-auto [&>svg]:my-auto"
           dangerouslySetInnerHTML={{ __html: svgPreview }}
         />
       </div>

@@ -4,6 +4,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useEditor } from '../../context/EditorContext';
 import { FONT_OPTIONS, STAMP_INK_COLORS, STAMP_MOUNT_PRESETS } from '../../lib/units';
 import { ensureFont } from '../../lib/font-loader';
+import { useCustomFonts, addCustomFont, removeCustomFont, toFontOption, getCustomFonts } from '../../lib/custom-fonts';
+import { assessLogoQuality, vectorizeLogoMask, type LogoQuality } from '../../lib/vectorize';
 
 /** Font name drawn in its own font — the font is only downloaded once the row scrolls into view. */
 const LazyFontName: React.FC<{ name: string; value: string }> = ({ name, value }) => {
@@ -71,6 +73,8 @@ import {
   Group,
   Ungroup,
   RotateCcw,
+  Upload,
+  Maximize2,
 } from 'lucide-react';
 
 import { AiStudioCopilot } from './AiStudioCopilot';
@@ -123,10 +127,43 @@ const LogoSettings: React.FC<{
   const [edit, setEdit] = useState(current);
   const [busy, setBusy] = useState(false);
   const [lockRatio, setLockRatio] = useState(true);
+  const [showMore, setShowMore] = useState(false);
   const [open, setOpen] = useState<{ tone: boolean; transform: boolean; crop: boolean }>({ tone: true, transform: false, crop: false });
   const fileRef = React.useRef<HTMLInputElement>(null);
   const jobRef = React.useRef(0);
   const timerRef = React.useRef<number | null>(null);
+
+  // ── Vector conversion (suggested for small / blurry uploads) ──
+  const [quality, setQuality] = useState<LogoQuality | null>(null);
+  const [vecDetail, setVecDetail] = useState<0 | 1 | 2>(1);
+  const [vectorizing, setVectorizing] = useState(false);
+  const [vecError, setVecError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setQuality(null);
+    assessLogoQuality(el.src).then((q) => alive && setQuality(q)).catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [el.src]);
+  const convertToVector = async () => {
+    if (!el.maskSrc) return;
+    setVectorizing(true);
+    setVecError(null);
+    try {
+      const v = await vectorizeLogoMask(el.maskSrc, vecDetail);
+      const cx = el.x + el.width / 2;
+      const cy = el.y + el.height / 2;
+      const h = el.height;
+      const w = +(h * v.aspect).toFixed(2);
+      // becomes a vector element in the same place (Ctrl+Z brings the image back)
+      onChange({ type: 'clipart', name: 'Vector logo', svgPath: v.svgPath, viewBox: v.viewBox, cx: +cx.toFixed(2), cy: +cy.toFixed(2), width: w, height: h });
+    } catch (e: any) {
+      setVecError(e?.message || 'Could not convert this image.');
+    } finally {
+      setVectorizing(false);
+    }
+  };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => setEdit(current()), [el.id]);
 
@@ -192,12 +229,16 @@ const LogoSettings: React.FC<{
     </div>
   );
 
+  const lowQuality = !!quality && (quality.lowRes || quality.blurry);
+  const ACTION =
+    'h-8 flex-1 flex items-center justify-center gap-1.5 rounded-lg text-[12px] font-medium border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-60';
+
   return (
     <section className="space-y-3 pb-4 border-b border-slate-100 dark:border-slate-800">
       <div className="flex items-center justify-between">
         <h3 className="text-[12px] font-semibold text-slate-800 dark:text-slate-100">{(el as any).isQr ? 'QR code' : 'Logo'}</h3>
         <span className="flex items-center gap-2">
-          {busy && <span className="text-[11px] text-slate-400 dark:text-slate-500">Updating…</span>}
+          {(busy || vectorizing) && <span className="text-[11px] text-slate-400 dark:text-slate-500">{vectorizing ? 'Converting…' : 'Updating…'}</span>}
           {isEdited && (
             <button
               type="button"
@@ -205,47 +246,47 @@ const LogoSettings: React.FC<{
               className="text-[11px] text-[#0d99ff] hover:underline cursor-pointer"
               title="Undo every logo edit (keeps the image)"
             >
-              Reset edits
+              Reset
             </button>
           )}
         </span>
       </div>
 
-      {/* Original vs stamp result */}
-      <div className="grid grid-cols-2 gap-2">
-        <div className="space-y-1">
-          <div className="aspect-square rounded-lg border border-slate-200 dark:border-slate-700 bg-[repeating-conic-gradient(#94a3b8_0%_25%,#cbd5e1_0%_50%)] bg-[length:10px_10px] flex items-center justify-center overflow-hidden p-1.5">
-            <img src={el.src} alt="Original logo" className="max-w-full max-h-full object-contain" />
-          </div>
-          <span className="block text-center text-[10.5px] text-slate-400 dark:text-slate-500">Original</span>
-        </div>
-        <div className="space-y-1">
-          <div className="aspect-square rounded-lg border border-slate-200 dark:border-slate-700 bg-white flex items-center justify-center overflow-hidden p-1.5">
-            {el.maskSrc ? (
-              <div
-                className="w-full h-full bg-slate-900"
-                style={{ WebkitMaskImage: `url(${el.maskSrc})`, maskImage: `url(${el.maskSrc})`, WebkitMaskSize: 'contain', maskSize: 'contain', WebkitMaskRepeat: 'no-repeat', maskRepeat: 'no-repeat', WebkitMaskPosition: 'center', maskPosition: 'center' }}
-              />
-            ) : null}
-          </div>
-          <span className="block text-center text-[10.5px] text-slate-400 dark:text-slate-500">On the stamp</span>
+      {/* One preview: how it prints, with the original as a small corner thumbnail */}
+      <div className="relative h-28 rounded-xl border border-slate-200 dark:border-slate-700 bg-white flex items-center justify-center overflow-hidden px-6 py-4">
+        {el.maskSrc && (
+          <div
+            className="w-full h-full bg-slate-900"
+            style={{ WebkitMaskImage: `url(${el.maskSrc})`, maskImage: `url(${el.maskSrc})`, WebkitMaskSize: 'contain', maskSize: 'contain', WebkitMaskRepeat: 'no-repeat', maskRepeat: 'no-repeat', WebkitMaskPosition: 'center', maskPosition: 'center' }}
+          />
+        )}
+        <div
+          className="absolute left-1.5 bottom-1.5 w-9 h-9 rounded-md border border-slate-200 bg-[repeating-conic-gradient(#cbd5e1_0%_25%,#f1f5f9_0%_50%)] bg-[length:6px_6px] flex items-center justify-center overflow-hidden p-0.5"
+          title="Original image"
+        >
+          <img src={el.src} alt="Original" className="max-w-full max-h-full object-contain" />
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          className="h-8 rounded-md border border-slate-200 dark:border-slate-700 text-[12px] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-        >
-          Replace image
+      {/* Actions */}
+      <div className="flex gap-1.5">
+        <button type="button" onClick={() => fileRef.current?.click()} className={ACTION} title="Replace image">
+          <Upload className="w-3.5 h-3.5" />
+          Replace
+        </button>
+        <button type="button" onClick={() => retrace(el.src, edit, true)} className={ACTION} title="Fit to the stamp and center">
+          <Maximize2 className="w-3.5 h-3.5" />
+          Fit
         </button>
         <button
           type="button"
-          onClick={() => retrace(el.src, edit, true)}
-          className="h-8 rounded-md border border-slate-200 dark:border-slate-700 text-[12px] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+          onClick={convertToVector}
+          disabled={vectorizing || !el.maskSrc}
+          className={`${ACTION} ${lowQuality ? '!bg-[#0d99ff] !border-[#0d99ff] !text-white hover:!bg-[#0b87e0]' : ''}`}
+          title="Trace into smooth vector outlines for sharp printing (Ctrl+Z to undo)"
         >
-          Fit & center
+          <Wand2 className="w-3.5 h-3.5" />
+          Vector
         </button>
         <input
           ref={fileRef}
@@ -261,22 +302,24 @@ const LogoSettings: React.FC<{
           }}
         />
       </div>
+      {lowQuality && (
+        <p className="text-[11px] leading-snug text-amber-700 dark:text-amber-300">
+          {quality!.lowRes ? `Low-quality image (${quality!.width}×${quality!.height} px)` : 'Blurry image'} — tap <b>Vector</b> for sharp edges.
+        </p>
+      )}
+      {vecError && <p className="text-[11px] text-rose-600 dark:text-rose-400">{vecError}</p>}
 
       {/* Style */}
-      <div className="space-y-1.5">
-        <span className="text-[11px] text-slate-500 dark:text-slate-400">Style</span>
-        <div className="grid grid-cols-3 gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950/60" role="radiogroup" aria-label="Logo style">
-          {([
-            { v: 'solid', label: 'Solid' },
-            { v: 'outline', label: 'Outline' },
-            { v: 'dots', label: 'Dots' },
-          ] as const).map(({ v, label }) => (
-            <button key={v} type="button" role="radio" aria-checked={edit.style === v} onClick={() => apply({ style: v }, true)} className={SEG(edit.style === v)}>
-              {label}
-            </button>
-          ))}
-        </div>
-        {edit.style === 'dots' && <p className="text-[10.5px] text-slate-400 dark:text-slate-500">Halftone dots — best for photos and shaded images.</p>}
+      <div className="grid grid-cols-3 gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950/60" role="radiogroup" aria-label="Logo style">
+        {([
+          { v: 'solid', label: 'Solid' },
+          { v: 'outline', label: 'Outline' },
+          { v: 'dots', label: 'Dots' },
+        ] as const).map(({ v, label }) => (
+          <button key={v} type="button" role="radio" aria-checked={edit.style === v} onClick={() => apply({ style: v }, true)} className={SEG(edit.style === v)}>
+            {label}
+          </button>
+        ))}
       </div>
 
       <LogoSlider label="Ink amount" hint="Higher = more of the image prints as ink" value={edit.threshold} min={20} max={240} step={5}
@@ -286,78 +329,92 @@ const LogoSettings: React.FC<{
           onChange={(v) => setEdit((s) => ({ ...s, outlineWidth: v }))} onCommit={(v) => apply({ outlineWidth: v })} />
       )}
 
-      <label className="flex items-center gap-2.5 py-0.5 cursor-pointer">
-        <span className="flex flex-col leading-tight">
-          <span className="text-[12px] text-slate-800 dark:text-slate-100">Invert</span>
-          <span className="text-[11px] text-slate-400 dark:text-slate-500">Swap ink and paper</span>
-        </span>
+      <label className="flex items-center gap-2.5 cursor-pointer">
+        <span className="text-[12px] text-slate-700 dark:text-slate-200">Invert</span>
         <input type="checkbox" checked={edit.invert} onChange={(e) => apply({ invert: e.target.checked }, true)} className="sr-only" />
         <span aria-hidden className={`ml-auto relative w-7 h-4 rounded-full shrink-0 transition-colors ${edit.invert ? 'bg-[#0d99ff]' : 'bg-slate-200 dark:bg-slate-700'}`}>
           <span className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${edit.invert ? 'translate-x-3' : ''}`} />
         </span>
       </label>
 
-      {group("tone", "Tone & edges", <>
-        <LogoSlider label="Contrast" value={edit.contrast} min={-100} max={100} step={5} display={`${edit.contrast > 0 ? '+' : ''}${edit.contrast}`}
-          onChange={(v) => setEdit((s) => ({ ...s, contrast: v }))} onCommit={(v) => apply({ contrast: v })} />
-        <LogoSlider label="Smooth edges" value={edit.smooth} min={0} max={4} display={edit.smooth ? `${edit.smooth}` : 'Off'}
-          onChange={(v) => setEdit((s) => ({ ...s, smooth: v }))} onCommit={(v) => apply({ smooth: v })} />
-        <LogoSlider label="Line weight" hint="Make thin lines bolder so they print, or slim heavy areas" value={edit.thickness} min={-3} max={3}
-          display={edit.thickness === 0 ? 'Normal' : edit.thickness > 0 ? `Bolder +${edit.thickness}` : `Thinner ${edit.thickness}`}
-          onChange={(v) => setEdit((s) => ({ ...s, thickness: v }))} onCommit={(v) => apply({ thickness: v })} />
-      </>)}
-
-      {group("transform", "Rotate & flip", <>
-        <div className="flex gap-1.5">
-          <button type="button" className={ICONBTN} title="Rotate left 90°" aria-label="Rotate left" onClick={() => apply({ rotate: (edit.rotate + 270) % 360 }, true)}>
-            <RotateCcw className="w-4 h-4" />
-          </button>
-          <button type="button" className={ICONBTN} title="Rotate right 90°" aria-label="Rotate right" onClick={() => apply({ rotate: (edit.rotate + 90) % 360 }, true)}>
-            <RotateCw className="w-4 h-4" />
-          </button>
-          <button type="button" className={`${ICONBTN} ${edit.flipH ? '!bg-[#e5f2ff] dark:!bg-blue-950/60 !text-[#0d99ff]' : ''}`} title="Flip horizontally" aria-pressed={edit.flipH} onClick={() => apply({ flipH: !edit.flipH }, true)}>
-            <FlipHorizontal className="w-4 h-4" />
-          </button>
-          <button type="button" className={`${ICONBTN} ${edit.flipV ? '!bg-[#e5f2ff] dark:!bg-blue-950/60 !text-[#0d99ff]' : ''}`} title="Flip vertically" aria-pressed={edit.flipV} onClick={() => apply({ flipV: !edit.flipV }, true)}>
-            <FlipVertical className="w-4 h-4" />
-          </button>
-        </div>
-        <LogoSlider label="Fine rotate" value={edit.fineRotate} min={-45} max={45} display={`${edit.fineRotate}°`}
-          onChange={(v) => setEdit((s) => ({ ...s, fineRotate: v }))} onCommit={(v) => apply({ fineRotate: v })} />
-      </>)}
-
-      {group("crop", "Crop", <>
-        {(['top', 'bottom', 'left', 'right'] as const).map((side) => (
-          <LogoSlider key={side} label={side[0].toUpperCase() + side.slice(1)} value={edit.crop[side]} min={0} max={45} display={`${edit.crop[side]}%`}
-            onChange={(v) => setEdit((s) => ({ ...s, crop: { ...s.crop, [side]: v } }))} onCommit={(v) => apply({ crop: { ...edit.crop, [side]: v } })} />
-        ))}
-        {Object.values(edit.crop).some(Boolean) && (
-          <button type="button" onClick={() => apply({ crop: { top: 0, right: 0, bottom: 0, left: 0 } }, true)} className="text-[11px] text-[#0d99ff] hover:underline cursor-pointer">
-            Reset crop
-          </button>
-        )}
-      </>)}
-
       {/* Size */}
-      <div className="space-y-1.5 border-t border-slate-100 dark:border-slate-800 pt-2.5">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] text-slate-500 dark:text-slate-400">Size</span>
-          <button
-            type="button"
-            onClick={() => setLockRatio((v) => !v)}
-            title={lockRatio ? 'Proportions locked — click to stretch freely' : 'Free size — click to keep proportions'}
-            className={`h-6 px-2 rounded-md flex items-center gap-1 text-[11px] transition-colors cursor-pointer ${lockRatio ? 'text-[#0d99ff] bg-[#e5f2ff] dark:bg-blue-950/60' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
-          >
-            {lockRatio ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-            {lockRatio ? 'Locked' : 'Free'}
-          </button>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
+      <div className="flex items-center gap-1.5">
+        <div className="grid grid-cols-2 gap-1.5 flex-1">
           <InlineNumberField label="W" value={Number(el.width.toFixed(1))} step={0.5} min={2} max={Math.max(widthMm, heightMm) * 1.5}
             onChange={(w) => resize(w, lockRatio ? w / ratio : el.height)} />
           <InlineNumberField label="H" value={Number(el.height.toFixed(1))} step={0.5} min={2} max={Math.max(widthMm, heightMm) * 1.5}
             onChange={(h) => resize(lockRatio ? h * ratio : el.width, h)} />
         </div>
+        <button
+          type="button"
+          onClick={() => setLockRatio((v) => !v)}
+          aria-pressed={lockRatio}
+          title={lockRatio ? 'Proportions locked — click to stretch freely' : 'Free size — click to keep proportions'}
+          className={`h-8 w-8 shrink-0 rounded-md flex items-center justify-center transition-colors cursor-pointer ${lockRatio ? 'text-[#0d99ff] bg-[#e5f2ff] dark:bg-blue-950/60' : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+        >
+          {lockRatio ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+        </button>
+      </div>
+
+      {/* Everything else, tucked away */}
+      <div className="border-t border-slate-100 dark:border-slate-800 pt-1.5">
+        <button
+          type="button"
+          onClick={() => setShowMore((v) => !v)}
+          aria-expanded={showMore}
+          className="w-full flex items-center justify-between py-1.5 text-[12px] text-slate-600 dark:text-slate-300 cursor-pointer"
+        >
+          More options
+          <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-300 ${showMore ? 'rotate-180' : ''}`} />
+        </button>
+        {showMore && (
+          <div className="space-y-3 pt-1.5">
+            <LogoSlider label="Contrast" value={edit.contrast} min={-100} max={100} step={5} display={`${edit.contrast > 0 ? '+' : ''}${edit.contrast}`}
+              onChange={(v) => setEdit((s) => ({ ...s, contrast: v }))} onCommit={(v) => apply({ contrast: v })} />
+            <LogoSlider label="Smooth edges" value={edit.smooth} min={0} max={4} display={edit.smooth ? `${edit.smooth}` : 'Off'}
+              onChange={(v) => setEdit((s) => ({ ...s, smooth: v }))} onCommit={(v) => apply({ smooth: v })} />
+            <LogoSlider label="Line weight" hint="Bolder lines print better; thinner slims heavy areas" value={edit.thickness} min={-3} max={3}
+              display={edit.thickness === 0 ? 'Normal' : edit.thickness > 0 ? `+${edit.thickness}` : `${edit.thickness}`}
+              onChange={(v) => setEdit((s) => ({ ...s, thickness: v }))} onCommit={(v) => apply({ thickness: v })} />
+
+            <div className="space-y-1.5">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">Rotate & flip</span>
+              <div className="flex gap-1.5">
+                <button type="button" className={ICONBTN} title="Rotate left 90°" aria-label="Rotate left" onClick={() => apply({ rotate: (edit.rotate + 270) % 360 }, true)}>
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+                <button type="button" className={ICONBTN} title="Rotate right 90°" aria-label="Rotate right" onClick={() => apply({ rotate: (edit.rotate + 90) % 360 }, true)}>
+                  <RotateCw className="w-4 h-4" />
+                </button>
+                <button type="button" className={`${ICONBTN} ${edit.flipH ? '!bg-[#e5f2ff] dark:!bg-blue-950/60 !text-[#0d99ff]' : ''}`} title="Flip horizontally" aria-pressed={edit.flipH} onClick={() => apply({ flipH: !edit.flipH }, true)}>
+                  <FlipHorizontal className="w-4 h-4" />
+                </button>
+                <button type="button" className={`${ICONBTN} ${edit.flipV ? '!bg-[#e5f2ff] dark:!bg-blue-950/60 !text-[#0d99ff]' : ''}`} title="Flip vertically" aria-pressed={edit.flipV} onClick={() => apply({ flipV: !edit.flipV }, true)}>
+                  <FlipVertical className="w-4 h-4" />
+                </button>
+              </div>
+              <LogoSlider label="Fine rotate" value={edit.fineRotate} min={-45} max={45} display={`${edit.fineRotate}°`}
+                onChange={(v) => setEdit((s) => ({ ...s, fineRotate: v }))} onCommit={(v) => apply({ fineRotate: v })} />
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">Crop</span>
+                {Object.values(edit.crop).some(Boolean) && (
+                  <button type="button" onClick={() => apply({ crop: { top: 0, right: 0, bottom: 0, left: 0 } }, true)} className="text-[11px] text-[#0d99ff] hover:underline cursor-pointer">
+                    Reset
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+                {(['top', 'bottom', 'left', 'right'] as const).map((side) => (
+                  <LogoSlider key={side} label={side[0].toUpperCase() + side.slice(1)} value={edit.crop[side]} min={0} max={45} display={`${edit.crop[side]}%`}
+                    onChange={(v) => setEdit((s) => ({ ...s, crop: { ...s.crop, [side]: v } }))} onCommit={(v) => apply({ crop: { ...edit.crop, [side]: v } })} />
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -539,7 +596,8 @@ const primaryFamily = (stack?: string) => (stack || '').split(',')[0].replace(/[
 const findFontOption = (stack?: string) => {
   if (!stack) return undefined;
   const p = primaryFamily(stack);
-  return FONT_OPTIONS.find((o) => o.value === stack) || FONT_OPTIONS.find((o) => primaryFamily(o.value) === p || o.name.toLowerCase() === p);
+  const all = [...getCustomFonts().map(toFontOption), ...FONT_OPTIONS];
+  return all.find((o) => o.value === stack) || all.find((o) => primaryFamily(o.value) === p || o.name.toLowerCase() === p);
 };
 
 export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ activeRightTab, setActiveRightTab }) => {
@@ -591,6 +649,16 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ activeRightTab
   } = useEditor();
 
   const [isFontDropdownOpen, setIsFontDropdownOpen] = useState(false);
+  // the user's own uploaded fonts (.ttf / .otf / .woff), listed first
+  const customFonts = useCustomFonts();
+  const allFonts = React.useMemo(() => [...customFonts.map(toFontOption), ...FONT_OPTIONS], [customFonts]);
+  const fontFileRef = React.useRef<HTMLInputElement>(null);
+  const [fontUploadMsg, setFontUploadMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    if (!fontUploadMsg) return;
+    const t = window.setTimeout(() => setFontUploadMsg(null), 3500);
+    return () => window.clearTimeout(t);
+  }, [fontUploadMsg]);
   const fontChipsSwipe = useSwipeScroll<HTMLDivElement>(); // swipeable font category chips (no scrollbar)
   const [fontSearchQuery, setFontSearchQuery] = useState('');
   const [fontCategoryFilter, setFontCategoryFilter] = useState('ALL');
@@ -979,8 +1047,32 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ activeRightTab
             <div className="relative space-y-1.5">
               <div className="flex items-baseline justify-between">
                 <span className="text-[11px] text-slate-500 dark:text-slate-400">Font</span>
-                <span className="text-[11px] text-slate-400 dark:text-slate-500 tabular-nums">{FONT_OPTIONS.length} fonts</span>
+                <span className="text-[11px] text-slate-400 dark:text-slate-500 tabular-nums">{allFonts.length} fonts</span>
               </div>
+              <input
+                ref={fontFileRef}
+                type="file"
+                accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2"
+                className="hidden"
+                aria-label="Upload font file"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (!file) return;
+                  try {
+                    const font = await addCustomFont(file);
+                    updateElement(selectedElement.id, { fontFamily: toFontOption(font).value } as any);
+                    setFontUploadMsg({ ok: true, text: `Added “${font.name}” and applied it` });
+                  } catch (err: any) {
+                    setFontUploadMsg({ ok: false, text: err?.message || 'Could not add this font.' });
+                  }
+                }}
+              />
+              {fontUploadMsg && (
+                <p role="status" className={`text-[11px] ${fontUploadMsg.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                  {fontUploadMsg.text}
+                </p>
+              )}
               <button
                 type="button"
                 onClick={() => setIsFontDropdownOpen(!isFontDropdownOpen)}
@@ -999,7 +1091,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ activeRightTab
                 >
                   {/* Search Bar & Category Filters */}
                   <div className="pb-2 border-b border-slate-100 dark:border-slate-800 space-y-1.5 shrink-0">
-                    <div className="flex items-center bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus-within:border-[#0d99ff] focus-within:bg-white rounded-xl px-2.5 py-1.5 transition-all">
+                    <div className="flex items-center gap-1.5">
+                    <div className="flex-1 min-w-0 flex items-center bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus-within:border-[#0d99ff] focus-within:bg-white rounded-xl px-2.5 py-1.5 transition-all">
                       <Search className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 mr-1.5 shrink-0" />
                       <input
                         type="text"
@@ -1015,11 +1108,22 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ activeRightTab
                         </button>
                       )}
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => fontFileRef.current?.click()}
+                      title="Upload your own font (.ttf, .otf, .woff, .woff2)"
+                      className="shrink-0 h-[30px] px-2.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[11px] font-semibold flex items-center gap-1 hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors cursor-pointer"
+                    >
+                      <Upload className="w-3 h-3" />
+                      Upload
+                    </button>
+                    </div>
 
                     {/* Category Filter Pills */}
                     <div ref={fontChipsSwipe.ref} {...fontChipsSwipe.handlers} className="no-scrollbar flex items-center gap-1 overflow-x-auto overscroll-x-contain select-none cursor-grab active:cursor-grabbing [mask-image:linear-gradient(to_right,black_82%,transparent)]">
                       {[
                         { id: 'ALL', label: 'All' },
+                        ...(customFonts.length ? [{ id: 'custom', label: 'My fonts' }] : []),
                         { id: 'sans', label: 'Sans' },
                         { id: 'serif', label: 'Serif' },
                         { id: 'bold', label: 'Bold' },
@@ -1046,7 +1150,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ activeRightTab
 
                   {/* Filtered Fonts List */}
                   <div className="overflow-y-auto overflow-x-hidden space-y-1 pt-1.5 max-h-56 pr-0.5">
-                    {FONT_OPTIONS
+                    {allFonts
                       .filter((f) => {
                         const matchesSearch = f.name.toLowerCase().includes(fontSearchQuery.toLowerCase()) || f.tag.toLowerCase().includes(fontSearchQuery.toLowerCase());
                         const matchesCat = fontCategoryFilter === 'ALL' || f.category === fontCategoryFilter;
@@ -1076,6 +1180,22 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ activeRightTab
                                 {f.tag}
                               </span>
                               {isSelected && <span className="text-[#0d99ff] font-bold text-xs">✓</span>}
+                              {f.category === 'custom' && (
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  title="Remove this font"
+                                  aria-label={`Remove ${f.name}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const own = customFonts.find((c) => c.name === f.name);
+                                    if (own) removeCustomFont(own.id);
+                                  }}
+                                  className="w-5 h-5 rounded-md flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                                >
+                                  ✕
+                                </span>
+                              )}
                             </div>
                           </button>
                         );

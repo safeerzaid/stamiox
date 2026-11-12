@@ -7,20 +7,22 @@ import { STAMP_MOUNT_PRESETS } from '../../lib/units';
 import { Tooltip } from '../common/Tooltip';
 import { ShapeSizeBadge } from '../common/ShapeSizeBadge';
 import { ThemeToggle } from '../common/ThemeToggle';
+import { AccountMenu } from './AccountMenu';
+import { MyDesignsModal } from './MyDesignsModal';
+import { SaveSplitButton } from './SaveSplitButton';
 import {
   ArrowLeft,
   ChevronDown,
   Play,
   Share2,
   Download,
-  Cloud,
+  History,
   Check,
   Compass,
   Undo2,
   Redo2,
   Copy,
   ClipboardPaste,
-  PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
@@ -53,9 +55,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     shape,
     zoom,
     setZoom,
-    saveProjectToCloud,
-    isSaving,
-    hasUnsavedChanges,
     projectTitle,
     setProjectTitle,
     canUndo,
@@ -75,15 +74,13 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     a4Instances,
     editingA4InstanceId,
     stopEditingA4Instance,
+    projectId,
   } = useEditor();
 
   const [isMountOpen, setIsMountOpen] = useState(false);
   const [isZoomOpen, setIsZoomOpen] = useState(false);
+  const [isDesignsOpen, setIsDesignsOpen] = useState(false);
   const [mountShapeFilter, setMountShapeFilter] = useState<string>('ALL');
-
-  const handleSave = async () => {
-    await saveProjectToCloud();
-  };
 
   // Choosing a shape tab switches the canvas to that shape right away, using the preset
   // closest in area to the current stamp (borders are morphed by setMountPreset).
@@ -95,22 +92,21 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   return (
     <header className="w-full bg-white dark:bg-slate-900 text-[#1e1e1e] dark:text-slate-100 border-b border-[#e5e5e5] dark:border-slate-800 px-2 sm:px-3 h-12 flex items-center justify-between gap-1.5 sm:gap-2 select-none z-40 relative shadow-2xs min-w-0 transition-colors">
       {/* --- LEFT: PANEL TOGGLE, HOME, DESIGN NAME & STAMP SIZE --- */}
-      <div className="flex items-center gap-0.5 min-w-0 shrink">
-        <Tooltip content={isLeftSidebarOpen ? 'Hide layers' : 'Show layers'} shortcut="L" side="bottom">
-          <button
-            type="button"
-            onClick={toggleLeftSidebar}
-            aria-pressed={isLeftSidebarOpen}
-            aria-label="Toggle layers panel"
-            className={`h-8 w-8 rounded-md flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
-              isLeftSidebarOpen
-                ? 'text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
-            }`}
-          >
-            {isLeftSidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
-          </button>
-        </Tooltip>
+      <div className="flex items-center gap-0.5 shrink-0">
+        {/* only while the layers panel is hidden — when it is open, its own header has the collapse button */}
+        {!isLeftSidebarOpen && (
+          <Tooltip content="Show layers" shortcut="L" side="bottom">
+            <button
+              type="button"
+              onClick={toggleLeftSidebar}
+              aria-pressed={false}
+              aria-label="Toggle layers panel"
+              className="h-8 w-8 rounded-md flex items-center justify-center transition-colors shrink-0 cursor-pointer text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800"
+            >
+              <PanelLeftOpen className="w-4 h-4" />
+            </button>
+          </Tooltip>
+        )}
 
         <Tooltip content="Back to home" side="bottom">
           <Link
@@ -130,14 +126,14 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             type="text"
             value={projectTitle}
             onChange={(e) => setProjectTitle(e.target.value)}
-            className="font-semibold text-[13px] text-slate-900 dark:text-white bg-transparent hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-white dark:focus:bg-slate-800 ring-1 ring-transparent focus:ring-[#0d99ff] px-2 h-8 rounded-md outline-none w-[110px] sm:w-[150px] md:w-[190px] truncate transition-colors"
+            className="font-semibold text-[13px] text-slate-900 dark:text-white bg-transparent hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-white dark:focus:bg-slate-800 ring-1 ring-transparent focus:ring-[#0d99ff] px-2 h-8 rounded-md outline-none w-[120px] 2xl:w-[190px] truncate transition-colors"
             placeholder="Untitled stamp"
             title="Click to rename"
           />
         </div>
 
         {/* Stamp size chip */}
-        <div className="relative hidden lg:block shrink-0">
+        <div className="relative hidden 2xl:block shrink-0">
           <button
             onClick={() => setIsMountOpen(!isMountOpen)}
             aria-expanded={isMountOpen}
@@ -239,7 +235,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       </div>
 
       {/* --- CENTER: SINGLE / A4 SHEET SWITCH (or the way back while editing an A4 copy) --- */}
-      <div className="hidden md:flex flex-1 justify-center min-w-0">
+      <div className="hidden md:flex flex-1 justify-center min-w-max px-1">
         {editingA4InstanceId && viewMode === 'SINGLE' ? (
           <button
             type="button"
@@ -258,7 +254,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             </span>
           </button>
         ) : (
-          <div role="tablist" aria-label="Workspace" className="relative grid grid-cols-2 p-0.5 rounded-full bg-slate-100 dark:bg-slate-800">
+          <div role="tablist" aria-label="Workspace" className="relative grid grid-cols-2 p-0.5 rounded-full bg-slate-100 dark:bg-slate-800 shrink-0 whitespace-nowrap">
             {/* sliding highlight */}
             <span
               aria-hidden
@@ -272,12 +268,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               aria-selected={viewMode === 'SINGLE'}
               onClick={() => setViewMode('SINGLE')}
               title="Design one stamp"
-              className={`relative z-10 h-7 px-3.5 flex items-center justify-center gap-1.5 rounded-full text-[12px] transition-colors cursor-pointer ${
+              className={`relative z-10 h-7 px-3.5 flex items-center justify-center gap-1.5 rounded-full text-[12px] whitespace-nowrap transition-colors cursor-pointer ${
                 viewMode === 'SINGLE' ? 'text-slate-900 dark:text-white font-semibold' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 font-medium'
               }`}
             >
               <Compass className={`w-3.5 h-3.5 ${viewMode === 'SINGLE' ? 'text-[#0d99ff]' : ''}`} />
-              Single
+              <span className="hidden min-[1360px]:inline">Single</span>
             </button>
             <button
               type="button"
@@ -285,12 +281,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               aria-selected={viewMode === 'A4_SHEET'}
               onClick={() => setViewMode('A4_SHEET')}
               title="Arrange many stamps on an A4 sheet"
-              className={`relative z-10 h-7 px-3.5 flex items-center justify-center gap-1.5 rounded-full text-[12px] transition-colors cursor-pointer ${
+              className={`relative z-10 h-7 px-3.5 flex items-center justify-center gap-1.5 rounded-full text-[12px] whitespace-nowrap transition-colors cursor-pointer ${
                 viewMode === 'A4_SHEET' ? 'text-slate-900 dark:text-white font-semibold' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 font-medium'
               }`}
             >
               <LayoutGrid className={`w-3.5 h-3.5 ${viewMode === 'A4_SHEET' ? 'text-[#0d99ff]' : ''}`} />
-              A4 sheet
+              <span className="hidden min-[1360px]:inline">A4 sheet</span>
               {a4Instances.length > 0 && (
                 <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#0d99ff] text-white text-[10px] font-bold leading-[18px] text-center tabular-nums">
                   {a4Instances.length}
@@ -330,12 +326,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 </button>
               </Tooltip>
               <Tooltip content="Copy element" shortcut="Ctrl+C" side="bottom">
-                <button onClick={copySelected} disabled={!canCopy} className={`${ICON} ${canCopy ? IDLE : OFF}`} aria-label="Copy element">
+                <button onClick={copySelected} disabled={!canCopy} className={`${ICON} hidden min-[1360px]:flex ${canCopy ? IDLE : OFF}`} aria-label="Copy element">
                   <Copy className="w-4 h-4" />
                 </button>
               </Tooltip>
               <Tooltip content="Paste element" shortcut="Ctrl+V" side="bottom">
-                <button onClick={() => pasteElement()} disabled={!canPaste} className={`${ICON} ${canPaste ? IDLE : OFF}`} aria-label="Paste element">
+                <button onClick={() => pasteElement()} disabled={!canPaste} className={`${ICON} hidden min-[1360px]:flex ${canPaste ? IDLE : OFF}`} aria-label="Paste element">
                   <ClipboardPaste className="w-4 h-4" />
                 </button>
               </Tooltip>
@@ -344,7 +340,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
             {/* Zoom: − 220% ▾ + */}
             <div className="relative flex items-center">
-              <button type="button" onClick={() => stepZoom(-1)} disabled={atMin} className={`${ICON} w-7 ${atMin ? OFF : IDLE}`} title="Zoom out" aria-label="Zoom out">
+              <button type="button" onClick={() => stepZoom(-1)} disabled={atMin} className={`${ICON} w-7 hidden min-[1360px]:flex ${atMin ? OFF : IDLE}`} title="Zoom out" aria-label="Zoom out">
                 <Minus className="w-3.5 h-3.5" />
               </button>
               <button
@@ -359,7 +355,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 {Math.round(zoom * 100)}%
                 <ChevronDown className={`w-3 h-3 text-slate-400 dark:text-slate-500 transition-transform duration-300 ${isZoomOpen ? 'rotate-180' : ''}`} />
               </button>
-              <button type="button" onClick={() => stepZoom(1)} disabled={atMax} className={`${ICON} w-7 ${atMax ? OFF : IDLE}`} title="Zoom in" aria-label="Zoom in">
+              <button type="button" onClick={() => stepZoom(1)} disabled={atMax} className={`${ICON} w-7 hidden min-[1360px]:flex ${atMax ? OFF : IDLE}`} title="Zoom in" aria-label="Zoom in">
                 <Plus className="w-3.5 h-3.5" />
               </button>
 
@@ -409,7 +405,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 <button
                   type="button"
                   onClick={onOpenSupportModal}
-                  className={`${ICON} ${IDLE} hover:text-[#0d99ff]`}
+                  className={`${ICON} ${IDLE} hover:text-[#0d99ff] hidden min-[1360px]:flex`}
                   aria-label="Support, Requirements & Suggestions"
                 >
                   <HelpCircle className="w-4 h-4" />
@@ -419,18 +415,24 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
             {/* Theme + Save */}
             <ThemeToggle size="sm" variant="ghost" />
-            <Tooltip content={isSaving ? 'Saving…' : hasUnsavedChanges ? 'Save to cloud (unsaved changes)' : 'Saved to cloud'} shortcut="Ctrl+S" side="bottom">
-              <button onClick={handleSave} disabled={isSaving} className={`${ICON} ${IDLE} relative`} aria-label="Save to cloud">
-                {isSaving ? (
-                  <span className="w-3.5 h-3.5 rounded-full border-2 border-slate-300 border-t-[#0d99ff] animate-spin" />
-                ) : (
-                  <Cloud className="w-4 h-4" />
-                )}
-                {hasUnsavedChanges && !isSaving && (
-                  <span aria-hidden className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[#0d99ff] ring-2 ring-white dark:ring-slate-900" />
-                )}
+            {/* History: the user's saved designs & templates */}
+            <Tooltip content="My designs — your saved designs & templates" side="bottom">
+              <button
+                type="button"
+                onClick={() => setIsDesignsOpen(true)}
+                className="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-[12px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0 cursor-pointer"
+              >
+                <History className="w-4 h-4" />
+                <span className="hidden 2xl:inline">My designs</span>
               </button>
             </Tooltip>
+
+            {/* Save to the account  ·  ▾ Save as template */}
+            <SaveSplitButton />
+            <MyDesignsModal isOpen={isDesignsOpen} onClose={() => setIsDesignsOpen(false)} />
+
+            {/* Account: history (my designs), save as template, log out */}
+            <span className="ml-1.5 flex"><AccountMenu /></span>
 
             {/* Export — the one primary action */}
             <Tooltip content="Export for laser / print" side="bottom">

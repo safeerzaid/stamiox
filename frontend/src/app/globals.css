@@ -838,3 +838,6 @@ button, input, select, textarea {
 @media (prefers-reduced-motion: reduce) {
   .fx-tab-in, .fx-tab-stagger > *, .fx-pill-in { animation: none; }
 }
+
+/* Stamp previews in dark theme: black ink turns light (like the dark canvas) so it stays visible */
+html.dark .ink-preview { filter: invert(1) hue-rotate(180deg); }

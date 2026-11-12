@@ -208,7 +208,7 @@ export const TemplateFullscreenModal: React.FC<TemplateFullscreenModalProps> = (
                 }`}
               >
                 <div
-                  className="w-48 h-48 flex items-center justify-center"
+                  className={`w-48 h-48 flex items-center justify-center ${invert ? '' : 'ink-preview'}`}
                   dangerouslySetInnerHTML={{ __html: svgPreview }}
                 />
               </div>

@@ -6,6 +6,8 @@ import { STAMP_TEMPLATES } from '../../../../backend/src/data/templates';
 import { generateStampSvg } from '../../lib/svg-generator';
 import { rankTemplates } from '../../lib/template-ranking';
 import { importTemplateFile, loadMyTemplates, saveMyTemplates, type UserTemplate } from '../../lib/template-io';
+import { ApiService } from '../../lib/api';
+import { useFavouriteTemplates } from '../../lib/favourite-templates';
 import {
   Layers,
   LayoutGrid,
@@ -28,6 +30,7 @@ import {
   Check,
   Zap,
   Upload as UploadIcon,
+  BookmarkPlus,
   X as XIcon,
 } from 'lucide-react';
 
@@ -125,7 +128,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     }
     if (el.type === 'ring') return 'Ring';
     if (el.type === 'serrated-ring') return 'Starburst';
-    if (el.type === 'clipart') return el.name ? `Clipart (${el.name})` : 'Clipart';
+    if (el.type === 'clipart') return el.name === 'Vector logo' ? 'Vector logo' : el.name ? `Clipart (${el.name})` : 'Clipart';
     if (el.type === 'rect') return 'Box Frame';
     if (el.type === 'oval') return 'Oval';
     if (el.type === 'image') return el.isQr ? 'QR code' : 'Logo';
@@ -429,6 +432,25 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   );
 };
 
+/** Star on a template card: filled amber when it is a favourite, shown on hover otherwise. */
+const FavStar: React.FC<{ active: boolean; title: string; onToggle: () => void; className?: string }> = ({ active, title, onToggle, className = 'top-1 right-1' }) => (
+  <button
+    type="button"
+    onClick={(e) => {
+      e.stopPropagation();
+      onToggle();
+    }}
+    aria-pressed={active}
+    aria-label={active ? `Remove ${title} from favourites` : `Add ${title} to favourites`}
+    title={active ? 'Remove from favourites' : 'Add to favourites'}
+    className={`absolute ${className} z-10 w-6 h-6 rounded-full bg-white/90 dark:bg-slate-900/90 shadow flex items-center justify-center transition-all duration-200 cursor-pointer active:scale-90 ${
+      active ? 'opacity-100 text-amber-500' : 'opacity-0 group-hover:opacity-100 focus:opacity-100 text-slate-400 hover:text-amber-500'
+    }`}
+  >
+    <Star className={`w-3.5 h-3.5 ${active ? 'fill-amber-400' : ''}`} />
+  </button>
+);
+
 /** Left-panel template picker: searchable 2-column grid of live stamp previews. */
 const TEMPLATE_SHAPES = [
   { id: 'ALL', label: 'All' },
@@ -444,7 +466,59 @@ const TemplatePicker: React.FC<{
   const [query, setQuery] = useState('');
   const [shapeFilter, setShapeFilter] = useState('ALL');
   const [applyingId, setApplyingId] = useState<string | null>(null);
-  const { switchCanvasShape, projectTitle, elements, widthMm, heightMm, shape } = useEditor();
+  const { favouriteIds, isFavourite, toggleFavourite } = useFavouriteTemplates();
+  const { switchCanvasShape, projectTitle, elements, widthMm, heightMm, shape, saveAsTemplate } = useEditor();
+
+  // ── Templates saved to the account (server) — shown with the imported ones under "My templates" ──
+  const [accountTemplates, setAccountTemplates] = useState<(UserTemplate & { cloud?: boolean })[]>([]);
+  const loadAccountTemplates = useCallback(async () => {
+    try {
+      const res = await ApiService.getProjects();
+      setAccountTemplates(
+        (res.projects || [])
+          .filter((p: any) => p.isTemplate)
+          .sort((a: any, b: any) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+          .map((p: any) => ({
+            id: p.id,
+            title: p.title,
+            description: p.description || '',
+            category: 'my-templates',
+            shape: p.shape,
+            widthMm: p.widthMm,
+            heightMm: p.heightMm,
+            tags: [],
+            defaultData: { inkColor: p.inkColor || '#111827', fields: {}, elements: p.elementsJson || [] },
+            importedAt: new Date(p.updatedAt).getTime(),
+            cloud: true,
+          }))
+      );
+    } catch {
+      /* not signed in / offline — just show the imported ones */
+    }
+  }, []);
+  useEffect(() => {
+    loadAccountTemplates();
+  }, [loadAccountTemplates]);
+  const [naming, setNaming] = useState(false);
+  const [tplName, setTplName] = useState('');
+  const [savingTpl, setSavingTpl] = useState(false);
+  const doSaveTemplate = async () => {
+    if (!elements.length) {
+      setIoMsg({ tone: 'err', text: 'Add something to the stamp first.' });
+      return;
+    }
+    setSavingTpl(true);
+    const name = (tplName || projectTitle).trim();
+    const ok = await saveAsTemplate(name);
+    setSavingTpl(false);
+    if (ok) {
+      setNaming(false);
+      await loadAccountTemplates();
+      setIoMsg({ tone: 'ok', text: `Saved “${name}” to My templates` });
+    } else {
+      setIoMsg({ tone: 'err', text: 'Could not save — please log in again.' });
+    }
+  };
 
   // ── My templates: imported files + saved designs (kept in this browser) ──
   const [myTemplates, setMyTemplates] = useState<UserTemplate[]>([]);
@@ -484,9 +558,10 @@ const TemplatePicker: React.FC<{
       setIoMsg({ tone: 'err', text: error });
     }
   };
+  const allMine = useMemo(() => [...accountTemplates, ...myTemplates], [accountTemplates, myTemplates]);
   const myPreviews = useMemo(() => {
     const map: Record<string, { __html: string }> = {};
-    for (const t of myTemplates) {
+    for (const t of allMine) {
       map[t.id] = {
         __html: generateStampSvg({ widthMm: t.widthMm, heightMm: t.heightMm, inkColor: t.defaultData.inkColor, elements: t.defaultData.elements, shape: t.shape })
           .replace(/width="[^"]*mm"/, 'width="100%"')
@@ -494,7 +569,19 @@ const TemplatePicker: React.FC<{
       };
     }
     return map;
-  }, [myTemplates]);
+  }, [allMine]);
+  const removeMine = async (t: UserTemplate & { cloud?: boolean }) => {
+    if (t.cloud) {
+      try {
+        await ApiService.deleteProject(t.id);
+        setAccountTemplates((prev) => prev.filter((x) => x.id !== t.id));
+      } catch {
+        setIoMsg({ tone: 'err', text: 'Could not remove this template.' });
+      }
+    } else {
+      storeMine(myTemplates.filter((x) => x.id !== t.id));
+    }
+  };
   // Picking a shape also switches the canvas to that shape
   const chooseShape = (id: string) => {
     setShapeFilter(id);
@@ -537,6 +624,65 @@ const TemplatePicker: React.FC<{
       (!q || t.title.toLowerCase().includes(q) || t.tags?.some((tag: string) => tag.toLowerCase().includes(q)))
   );
 
+  // Favourites: built-in and own templates, newest favourite first, same search / shape filter
+  const favourites = favouriteIds
+    .map((id) => (ranked as any[]).find((t) => t.id === id) || allMine.find((t) => t.id === id))
+    .filter(
+      (t: any) =>
+        t &&
+        (shapeFilter === 'ALL' || t.shape === shapeFilter) &&
+        (!q || t.title.toLowerCase().includes(q) || t.tags?.some((tag: string) => tag.toLowerCase().includes(q)))
+    ) as any[];
+
+  const renderCard = (t: any) => {
+    const isApplying = applyingId === t.id;
+    const isCurrent = projectTitle === t.title;
+    return (
+      <div key={t.id} className="group relative">
+        <button
+          onClick={() => handlePick(t)}
+          disabled={applyingId === t.id}
+          title={`${t.title} — ${t.widthMm}×${t.heightMm} mm`}
+          className={`w-full relative text-left rounded-xl border overflow-hidden transition-all duration-200 cursor-pointer ${
+            isApplying || isCurrent
+              ? 'ring-2 ring-[#0d99ff] border-[#0d99ff] bg-[#f0f7ff] dark:bg-blue-950/40 shadow-sm'
+              : 'border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-[#0d99ff] dark:hover:border-[#0d99ff] hover:shadow-md active:scale-[0.96]'
+          }`}
+        >
+          <div className="aspect-square bg-slate-50 dark:bg-slate-950/50 group-hover:bg-[#f0f7ff] dark:group-hover:bg-slate-800/70 flex items-center justify-center p-2.5 transition-colors relative">
+            <div
+              className="ink-preview w-full h-full flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-full transition-transform duration-300 group-hover:scale-105"
+              dangerouslySetInnerHTML={previews[t.id] || myPreviews[t.id]}
+            />
+            {isApplying && (
+              <div className="absolute inset-0 bg-[#0d99ff]/15 backdrop-blur-[1px] flex items-center justify-center">
+                <div className="px-2.5 py-1 rounded-full bg-[#0d99ff] text-white text-[11px] font-bold shadow-lg flex items-center gap-1 fx-pop-in">
+                  <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                  Applied!
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="px-2 py-1.5 border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900">
+            <div
+              className={`text-[11px] font-semibold truncate transition-colors ${
+                isCurrent
+                  ? 'text-[#0d99ff] dark:text-[#38bdf8]'
+                  : 'text-slate-800 dark:text-slate-100 group-hover:text-[#0d99ff] dark:group-hover:text-[#38bdf8]'
+              }`}
+            >
+              {t.title}
+            </div>
+            <div className="text-[10px] text-slate-400 dark:text-slate-400 tabular-nums">
+              {t.shape === 'ROUND' ? `Ø ${t.widthMm} mm` : `${t.widthMm} × ${t.heightMm} mm`}
+            </div>
+          </div>
+        </button>
+        <FavStar active={isFavourite(t.id)} title={t.title} onToggle={() => toggleFavourite(t.id)} />
+      </div>
+    );
+  };
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="p-2.5 space-y-2 border-b border-slate-100 dark:border-slate-800">
@@ -548,7 +694,7 @@ const TemplatePicker: React.FC<{
             title="Import a template file (.json) or a stamp image (PNG, JPG, SVG)"
             className="w-full h-8 flex items-center justify-center gap-1.5 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[12px] font-semibold hover:bg-slate-800 dark:hover:bg-slate-100 disabled:opacity-60 transition-colors cursor-pointer"
           >
-            <UploadIcon className="w-3.5 h-3.5" />
+            <UploadIcon className="w-3.5 h-3.5 shrink-0" />
             {importing ? 'Importing…' : 'Import'}
           </button>
           <input
@@ -596,14 +742,27 @@ const TemplatePicker: React.FC<{
       </div>
 
       <div className="flex-1 overflow-y-auto p-2.5 min-h-0">
-        {myTemplates.length > 0 && (
+        {favourites.length > 0 && (
+          <div className="mb-3">
+            <div className="flex items-center justify-between px-0.5 mb-1.5">
+              <span className="flex items-center gap-1 text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+                <Star className="w-3 h-3 text-amber-500 fill-amber-400" />
+                Favourites
+              </span>
+              <span className="text-[10.5px] text-slate-400 dark:text-slate-500 tabular-nums">{favourites.length}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">{favourites.map(renderCard)}</div>
+            <div className="h-px bg-slate-100 dark:bg-slate-800 mt-3" />
+          </div>
+        )}
+        {allMine.length > 0 && (
           <div className="mb-3">
             <div className="flex items-center justify-between px-0.5 mb-1.5">
               <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">My templates</span>
-              <span className="text-[10.5px] text-slate-400 dark:text-slate-500 tabular-nums">{myTemplates.length}</span>
+              <span className="text-[10.5px] text-slate-400 dark:text-slate-500 tabular-nums">{allMine.length}</span>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {myTemplates.map((t) => (
+              {allMine.map((t) => (
                 <div key={t.id} className="group relative">
                   <button
                     type="button"
@@ -614,16 +773,17 @@ const TemplatePicker: React.FC<{
                     }`}
                   >
                     <div className="aspect-square bg-slate-50 dark:bg-slate-950/50 flex items-center justify-center p-2.5">
-                      <div className="w-full h-full flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-full" dangerouslySetInnerHTML={myPreviews[t.id]} />
+                      <div className="ink-preview w-full h-full flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-full" dangerouslySetInnerHTML={myPreviews[t.id]} />
                     </div>
                     <div className="px-2 py-1.5 border-t border-slate-100 dark:border-slate-800">
                       <p className="text-[11px] font-medium text-slate-800 dark:text-slate-100 truncate">{t.title}</p>
                       <p className="text-[10px] text-slate-400 dark:text-slate-500 tabular-nums">{t.widthMm}×{t.heightMm} mm</p>
                     </div>
                   </button>
+                  <FavStar active={isFavourite(t.id)} title={t.title} onToggle={() => toggleFavourite(t.id)} className="top-1 right-8" />
                   <button
                     type="button"
-                    onClick={() => storeMine(myTemplates.filter((x) => x.id !== t.id))}
+                    onClick={() => removeMine(t)}
                     title="Remove from My templates"
                     aria-label={`Remove ${t.title}`}
                     className="absolute top-1 right-1 w-6 h-6 rounded-full bg-white/90 dark:bg-slate-900/90 shadow text-slate-500 hover:text-rose-600 flex items-center justify-center opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity cursor-pointer"
@@ -640,52 +800,7 @@ const TemplatePicker: React.FC<{
           <p className="text-[12px] text-slate-400 text-center py-8">No templates match “{query}”.</p>
         ) : (
           <div className="grid grid-cols-2 gap-2">
-            {list.map((t) => {
-              const isApplying = applyingId === t.id;
-              const isCurrent = projectTitle === t.title;
-              return (
-                <button
-                  key={t.id}
-                  onClick={() => handlePick(t)}
-                  disabled={applyingId === t.id}
-                  title={`${t.title} — ${t.widthMm}×${t.heightMm} mm`}
-                  className={`group relative text-left rounded-xl border overflow-hidden transition-all duration-200 cursor-pointer ${
-                    isApplying || isCurrent
-                      ? 'ring-2 ring-[#0d99ff] border-[#0d99ff] bg-[#f0f7ff] dark:bg-blue-950/40 shadow-sm'
-                      : 'border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-[#0d99ff] dark:hover:border-[#0d99ff] hover:shadow-md hover:-translate-y-0.5 active:scale-[0.96]'
-                  }`}
-                >
-                  <div className="aspect-square bg-slate-50 dark:bg-slate-950/50 group-hover:bg-[#f0f7ff] dark:group-hover:bg-slate-800/70 flex items-center justify-center p-2.5 transition-colors relative">
-                    <div
-                      className="w-full h-full flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-full transition-transform duration-300 group-hover:scale-105"
-                      dangerouslySetInnerHTML={previews[t.id]}
-                    />
-                    {isApplying && (
-                      <div className="absolute inset-0 bg-[#0d99ff]/15 backdrop-blur-[1px] flex items-center justify-center">
-                        <div className="px-2.5 py-1 rounded-full bg-[#0d99ff] text-white text-[11px] font-bold shadow-lg flex items-center gap-1 fx-pop-in">
-                          <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                          Applied!
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="px-2 py-1.5 border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900">
-                    <div
-                      className={`text-[11px] font-semibold truncate transition-colors ${
-                        isCurrent
-                          ? 'text-[#0d99ff] dark:text-[#38bdf8]'
-                          : 'text-slate-800 dark:text-slate-100 group-hover:text-[#0d99ff] dark:group-hover:text-[#38bdf8]'
-                      }`}
-                    >
-                      {t.title}
-                    </div>
-                    <div className="text-[10px] text-slate-400 dark:text-slate-400 tabular-nums">
-                      {t.shape === 'ROUND' ? `Ø ${t.widthMm} mm` : `${t.widthMm} × ${t.heightMm} mm`}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
+            {list.map(renderCard)}
           </div>
         )}
       </div>

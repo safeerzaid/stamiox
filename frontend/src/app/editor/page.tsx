@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { useEditor } from '../../context/EditorContext';
+import { useAuth } from '../../context/AuthContext';
+import { useRouter } from 'next/navigation';
 import { Toolbar } from '../../components/editor/Toolbar';
 import { Canvas } from '../../components/editor/Canvas';
 import { A4ProductionSheet } from '../../components/editor/A4ProductionSheet';
@@ -13,7 +15,7 @@ import { SupportModal } from '../../components/common/SupportModal';
 import { ARRealWorldModal } from '../../components/editor/ARRealWorldModal';
 import { InteractiveDesignModal } from '../../components/editor/InteractiveDesignModal';
 
-export default function EditorPage() {
+function EditorPage() {
   const { viewMode, viewRestored, loadAiGeneratedStamp } = useEditor();
   const [activeView, setActiveView] = useState(viewMode);
   const [isTransitioning, setIsTransitioning] = useState(false);
@@ -149,4 +151,28 @@ export default function EditorPage() {
       />
     </div>
   );
+}
+
+/** The Studio is for registered users only — everyone else is sent to Register first. */
+export default function EditorGate() {
+  const { user, isLoading } = useAuth();
+  const router = useRouter();
+  useEffect(() => {
+    if (!isLoading && !user) {
+      // people who already have an account here get Log in; newcomers get Register
+      let known = false;
+      try { known = localStorage.getItem('stamiox_has_account') === '1'; } catch { /* ignore */ }
+      router.replace(`/login?tab=${known ? 'login' : 'register'}&next=/editor`);
+    }
+  }, [isLoading, user, router]);
+
+  if (isLoading || !user) {
+    return (
+      <div className="h-screen w-full flex flex-col items-center justify-center gap-3 bg-[#f5f5f5] dark:bg-[#0b0f19]">
+        <span className="w-6 h-6 rounded-full border-2 border-slate-300 border-t-[#0d99ff] animate-spin" />
+        <span className="text-[13px] text-slate-500 dark:text-slate-400">{isLoading ? 'Checking your account…' : 'Please register or log in to open the Studio'}</span>
+      </div>
+    );
+  }
+  return <EditorPage />;
 }
