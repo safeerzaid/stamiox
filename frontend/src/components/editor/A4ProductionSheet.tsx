@@ -4,6 +4,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useEditor } from '../../context/EditorContext';
 import { useTheme } from '../../context/ThemeContext';
 import { A4StampInstance, COMMON_A4_PRESET_SIZES } from '../../types/a4-sheet';
+import { A4StampEditorModal } from './A4StampEditorModal';
 import {
   getA4PageDimensions,
   printA4Sheet,
@@ -228,10 +229,29 @@ export const A4ProductionSheet: React.FC = () => {
   const hasDuplicatedOnAltDragRef = useRef<boolean>(false);
 
   const [isDraggingStamp, setIsDraggingStamp] = useState<boolean>(false);
+  // a stamp clicked (not dragged) opens in its own popup editor
+  const [popupInstanceId, setPopupInstanceId] = useState<string | null>(null);
+  const stampDownRef = useRef<{ x: number; y: number } | null>(null);
+  const popupInstance = popupInstanceId ? a4Instances.find((x) => x.instanceId === popupInstanceId) || null : null;
   const [dragOffsetMm, setDragOffsetMm] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [hoveredInstanceId, setHoveredInstanceId] = useState<string | null>(null);
   const [isExportMenuOpen, setIsExportMenuOpen] = useState<boolean>(false);
   const [isAddPresetOpen, setIsAddPresetOpen] = useState<boolean>(false);
+  // the size list closes on any click outside it (or Esc)
+  const addPresetRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isAddPresetOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (addPresetRef.current && !addPresetRef.current.contains(e.target as Node)) setIsAddPresetOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setIsAddPresetOpen(false);
+    document.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [isAddPresetOpen]);
 
   const sheetRef = useRef<SVGSVGElement | null>(null);
 
@@ -354,6 +374,7 @@ export const A4ProductionSheet: React.FC = () => {
       return; // Handled by window pointerdown pan listener
     }
     e.stopPropagation();
+    stampDownRef.current = { x: e.clientX, y: e.clientY };
     setSelectedA4InstanceId(inst.instanceId);
     setIsDraggingStamp(true);
 
@@ -407,9 +428,16 @@ export const A4ProductionSheet: React.FC = () => {
     });
   };
 
-  const handleSheetPointerUp = () => {
+  const handleSheetPointerUp = (e?: React.PointerEvent) => {
     hasDuplicatedOnAltDragRef.current = false;
     setIsDraggingStamp(false);
+    // a press-and-release on a stamp without moving it opens that stamp in a popup editor
+    // (decided here, not on 'click': selecting redraws the stamp, so the browser drops the click)
+    const d = stampDownRef.current;
+    stampDownRef.current = null;
+    if (e && d && selectedA4InstanceId && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) {
+      setPopupInstanceId(selectedA4InstanceId);
+    }
   };
 
   // Add specific preset size cloned from current design
@@ -475,7 +503,7 @@ export const A4ProductionSheet: React.FC = () => {
             </button>
 
             {/* Clone in another size */}
-            <div className="relative">
+            <div ref={addPresetRef} className="relative">
               <button
                 type="button"
                 onClick={() => setIsAddPresetOpen(!isAddPresetOpen)}
@@ -852,10 +880,6 @@ export const A4ProductionSheet: React.FC = () => {
                       key={inst.instanceId}
                       transform={`translate(${inst.xMm}, ${inst.yMm})`}
                       onPointerDown={(e) => handleStampPointerDown(e, inst)}
-                      onDoubleClick={(e) => {
-                        e.stopPropagation();
-                        editA4InstanceInSingleEditor(inst.instanceId);
-                      }}
                       onMouseEnter={() => setHoveredInstanceId(inst.instanceId)}
                       onMouseLeave={() => setHoveredInstanceId(null)}
                       className="cursor-move group"
@@ -1075,15 +1099,25 @@ export const A4ProductionSheet: React.FC = () => {
             <div className="p-4 border-t border-slate-100 dark:border-slate-800">
               <button
                 type="button"
-                onClick={() => editA4InstanceInSingleEditor(selectedInstance.instanceId)}
+                onClick={() => setPopupInstanceId(selectedInstance.instanceId)}
                 className="w-full h-9 flex items-center justify-center gap-2 rounded-lg bg-[#0d99ff] hover:bg-[#0b87e0] active:scale-[0.98] text-white text-[12px] font-semibold shadow-[0_4px_12px_-4px_rgba(13,153,255,0.7)] transition-all cursor-pointer"
-                title="Open this stamp with all design tools"
+                title="Open only this stamp in its own editor"
               >
                 <Edit3 className="w-4 h-4" />
-                Edit in Studio
+                Edit this stamp
               </button>
             </div>
           </aside>
+        )}
+
+        {/* One stamp in its own popup editor — saving changes only this stamp */}
+        {popupInstance && (
+          <A4StampEditorModal
+            key={popupInstance.instanceId}
+            instance={popupInstance}
+            onSave={(u) => updateA4Instance(popupInstance.instanceId, u)}
+            onClose={() => setPopupInstanceId(null)}
+          />
         )}
       </div>
   );

@@ -75,13 +75,14 @@ import {
   RotateCcw,
   Upload,
   Maximize2,
+  HelpCircle,
 } from 'lucide-react';
 
 import { AiStudioCopilot } from './AiStudioCopilot';
 import { AiOrbIcon } from './AiOrbIcon';
 import { useSwipeScroll } from '../../hooks/useSwipeScroll';
 import { ShapeSizeBadge } from '../common/ShapeSizeBadge';
-import { processLogoAdvanced, readLogoFile, fitLogo, DEFAULT_LOGO_THRESHOLD, LOGO_EDIT_KEYS, type LogoEdit } from '../../lib/logo';
+import { processLogoAdvanced, readLogoFile, fitLogo, stampReadyEdit, DEFAULT_LOGO_THRESHOLD, LOGO_EDIT_KEYS, type LogoEdit } from '../../lib/logo';
 
 
 /** Logo editor: style, tone, transform, crop and size — every edit re-traces the stamp silhouette. */
@@ -91,7 +92,7 @@ type LogoEl = {
 
 const LOGO_DEFAULTS: Required<Omit<LogoEdit, 'crop'>> & { crop: NonNullable<LogoEdit['crop']> } = {
   threshold: DEFAULT_LOGO_THRESHOLD, invert: false, style: 'solid', outlineWidth: 2, contrast: 0, smooth: 0, thickness: 0,
-  rotate: 0, fineRotate: 0, flipH: false, flipV: false, crop: { top: 0, right: 0, bottom: 0, left: 0 },
+  rotate: 0, fineRotate: 0, flipH: false, flipV: false, crop: { top: 0, right: 0, bottom: 0, left: 0 }, simplify: 0, splitTone: 0, removeBg: false,
 };
 
 const LogoSlider: React.FC<{
@@ -126,6 +127,7 @@ const LogoSettings: React.FC<{
   // local copy so sliders move instantly; tracing runs behind it
   const [edit, setEdit] = useState(current);
   const [busy, setBusy] = useState(false);
+  const [readying, setReadying] = useState(false);
   const [lockRatio, setLockRatio] = useState(true);
   const [showMore, setShowMore] = useState(false);
   const [open, setOpen] = useState<{ tone: boolean; transform: boolean; crop: boolean }>({ tone: true, transform: false, crop: false });
@@ -309,6 +311,35 @@ const LogoSettings: React.FC<{
       )}
       {vecError && <p className="text-[11px] text-rose-600 dark:text-rose-400">{vecError}</p>}
 
+      {/* One click: clean, one-colour, engravable stamp graphic (QR codes stay crisp, so not for them) */}
+      {!(el as any).isQr && (
+        <button
+          type="button"
+          disabled={busy || readying}
+          onClick={async () => {
+            setReadying(true);
+            try {
+              const ready = await stampReadyEdit(el.src);
+              const next = { ...edit, ...ready, crop: { ...edit.crop } } as typeof LOGO_DEFAULTS;
+              setEdit(next);
+              await retrace(el.src, next);
+            } finally {
+              setReadying(false);
+            }
+          }}
+          className="w-full h-9 flex items-center justify-center gap-1.5 rounded-lg text-[12px] font-semibold text-white bg-[#0d99ff] hover:bg-[#0b87e0] disabled:opacity-60 transition-colors cursor-pointer"
+          title="One ink colour, best cut-off for this logo, small details removed, smooth edges, bolder thin lines"
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          {readying ? 'Preparing…' : 'Make stamp-ready'}
+        </button>
+      )}
+      {!(el as any).isQr && el.width < 8 && (
+        <p className="text-[11px] leading-snug text-amber-700 dark:text-amber-300">
+          Small logo ({el.width.toFixed(1)} mm) — fine details may not engrave. Use <b>Simplify</b> or <b>Line weight</b> to keep it clean.
+        </p>
+      )}
+
       {/* Style */}
       <div className="grid grid-cols-3 gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950/60" role="radiogroup" aria-label="Logo style">
         {([
@@ -324,9 +355,57 @@ const LogoSettings: React.FC<{
 
       <LogoSlider label="Ink amount" hint="Higher = more of the image prints as ink" value={edit.threshold} min={20} max={240} step={5}
         onChange={(v) => setEdit((s) => ({ ...s, threshold: v }))} onCommit={(v) => apply({ threshold: v })} />
+      {!(el as any).isQr && (
+        <LogoSlider
+          label="Simplify details"
+          hint="Removes tiny specks, small holes and rough edges so the logo engraves cleanly"
+          value={edit.simplify}
+          min={0}
+          max={3}
+          display={['Off', 'Low', 'Medium', 'High'][edit.simplify] || 'Off'}
+          onChange={(v) => setEdit((s) => ({ ...s, simplify: v }))}
+          onCommit={(v) => apply({ simplify: v })}
+        />
+      )}
       {edit.style === 'outline' && (
         <LogoSlider label="Outline width" value={edit.outlineWidth} min={1} max={8}
           onChange={(v) => setEdit((s) => ({ ...s, outlineWidth: v }))} onCommit={(v) => apply({ outlineWidth: v })} />
+      )}
+
+      {!(el as any).isQr && (
+        <label className="flex items-center gap-2.5 cursor-pointer" title="Removes a solid or coloured background around the logo (parts inside the logo stay)">
+          <span className="flex flex-col">
+            <span className="text-[12px] text-slate-700 dark:text-slate-200">Remove background</span>
+            <span className="text-[10.5px] text-slate-400 dark:text-slate-500">Clears a coloured box / photo background</span>
+          </span>
+          <input type="checkbox" checked={!!edit.removeBg} onChange={(e) => apply({ removeBg: e.target.checked }, true)} className="sr-only" />
+          <span aria-hidden className={`ml-auto relative w-7 h-4 rounded-full shrink-0 transition-colors ${edit.removeBg ? 'bg-[#0d99ff]' : 'bg-slate-200 dark:bg-slate-700'}`}>
+            <span className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${edit.removeBg ? 'translate-x-3' : ''}`} />
+          </span>
+        </label>
+      )}
+
+      {!(el as any).isQr && edit.style === 'solid' && (
+        <label className="flex items-center gap-2.5 cursor-pointer" title="Two-colour logos: the darker colour prints solid, the lighter colour becomes an outline">
+          <span className="flex flex-col">
+            <span className="text-[12px] text-slate-700 dark:text-slate-200">Separate colours</span>
+            <span className="text-[10.5px] text-slate-400 dark:text-slate-500">Dark parts solid, light parts as outline</span>
+          </span>
+          <input
+            type="checkbox"
+            checked={edit.splitTone > 0}
+            onChange={async (e) => {
+              if (!e.target.checked) return apply({ splitTone: 0 }, true);
+              // find this logo's two colours; fall back to a cut-off well below the ink amount
+              const ready = await stampReadyEdit(el.src).catch(() => null);
+              apply({ splitTone: ready?.splitTone || Math.max(20, edit.threshold - 70) }, true);
+            }}
+            className="sr-only"
+          />
+          <span aria-hidden className={`ml-auto relative w-7 h-4 rounded-full shrink-0 transition-colors ${edit.splitTone > 0 ? 'bg-[#0d99ff]' : 'bg-slate-200 dark:bg-slate-700'}`}>
+            <span className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${edit.splitTone > 0 ? 'translate-x-3' : ''}`} />
+          </span>
+        </label>
       )}
 
       <label className="flex items-center gap-2.5 cursor-pointer">
@@ -423,6 +502,7 @@ const LogoSettings: React.FC<{
 interface PropertiesPanelProps {
   activeRightTab: 'SETUP' | 'AI';
   setActiveRightTab: (tab: 'SETUP' | 'AI') => void;
+  onOpenSupportModal?: () => void;
 }
 
 // Unified Ultra-Clean Modern Stepper (Figma / Linear Style with Pixel-Perfect Controls)
@@ -600,7 +680,7 @@ const findFontOption = (stack?: string) => {
   return all.find((o) => o.value === stack) || all.find((o) => primaryFamily(o.value) === p || o.name.toLowerCase() === p);
 };
 
-export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ activeRightTab, setActiveRightTab }) => {
+export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ activeRightTab, setActiveRightTab, onOpenSupportModal }) => {
   // Sections slide in one by one only when the Setup tab opens — not every time a selection
   // adds a section (that made the panel jump on each click).
   const [setupIntro, setSetupIntro] = useState(true);
@@ -782,23 +862,27 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ activeRightTab
             </div>
           </div>
 
-          {/* Tab Switcher */}
+          {/* Tab Switcher — Setup turns blue when open; Clixio AI is always the glossy liquid pill (livelier when open) */}
           <style>{`
             @keyframes clx-flow { from { transform: translateX(0); } to { transform: translateX(-50%); } }
             @keyframes clx-flow-rev { from { transform: translateX(-50%); } to { transform: translateX(0); } }
             @keyframes clx-bob { 0%,100% { translate: 0 0; } 50% { translate: 0 8%; } }
-            @keyframes clx-hue { from { filter: hue-rotate(0deg) saturate(.65); } to { filter: hue-rotate(360deg) saturate(.65); } }
+            @keyframes clx-hue { from { filter: hue-rotate(0deg) saturate(.75); } to { filter: hue-rotate(360deg) saturate(.75); } }
+            @keyframes clx-twinkle { 0%, 100% { transform: scale(1) rotate(0deg); } 50% { transform: scale(1.2) rotate(18deg); } }
             .clx-wave { position: absolute; left: 0; bottom: 0; width: 200%; height: 100%; }
             .clx-wave-back { opacity: .35; filter: blur(2px); animation: clx-flow-rev 6s linear infinite, clx-bob 2.6s ease-in-out infinite; }
             .clx-wave-front { opacity: .55; filter: blur(1px); animation: clx-flow 4s linear infinite, clx-bob 3.2s ease-in-out infinite reverse; }
             .clx-wave-glow { opacity: .2; filter: blur(8px); animation: clx-flow 4s linear infinite; }
             .clx-hue { position: absolute; inset: 0; animation: clx-hue 10s linear infinite; }
-            .clx-ai-btn[data-active=true] .clx-wave-front { animation-duration: 2.6s, 2.2s; }
-            .clx-ai-btn[data-active=true] .clx-wave-back { animation-duration: 4s, 2s; }
-            @media (prefers-reduced-motion: reduce) { .clx-wave, .clx-hue { animation: none !important; } }
+            .clx-twinkle { animation: clx-twinkle 2.2s ease-in-out infinite; }
+            .clx-ai-btn[data-active=true] .clx-wave-front { opacity: .7; animation-duration: 2.6s, 2.2s; }
+            .clx-ai-btn[data-active=true] .clx-wave-back { opacity: .45; animation-duration: 4s, 2s; }
+            .clx-ai-btn[data-active=true] .clx-wave-glow { opacity: .3; }
+            .clx-ai-btn[data-active=true] .clx-twinkle { animation-duration: 1.4s; }
+            @media (prefers-reduced-motion: reduce) { .clx-wave, .clx-hue, .clx-twinkle { animation: none !important; } }
           `}</style>
           <div className="px-3 pb-3">
-            <div className="relative grid grid-cols-2 gap-1 p-1 rounded-full bg-slate-100 dark:bg-slate-800">
+            <div role="tablist" className="relative grid grid-cols-2 gap-1 p-1 rounded-full bg-slate-100 dark:bg-slate-800">
               {/* Setup indicator */}
               <span
                 aria-hidden
@@ -812,29 +896,31 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ activeRightTab
                 onClick={() => setActiveRightTab('SETUP')}
                 role="tab"
                 aria-selected={activeRightTab === 'SETUP'}
-                className={`relative z-10 h-8 flex items-center justify-center gap-1.5 text-[12px] font-medium rounded-full transition-colors cursor-pointer ${
-                  activeRightTab === 'SETUP' ? 'text-white font-semibold' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                className={`relative z-10 h-8 flex items-center justify-center gap-1.5 text-[12px] rounded-full transition-colors cursor-pointer ${
+                  activeRightTab === 'SETUP' ? 'text-white font-semibold' : 'font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
                 }`}
               >
                 <Sliders className="w-3.5 h-3.5" />
                 Setup
               </button>
 
-              {/* Clixio AI – glossy liquid pill */}
+              {/* Clixio AI – glossy liquid pill with flowing rainbow waves */}
               <button
                 type="button"
                 onClick={() => setActiveRightTab('AI')}
                 role="tab"
                 aria-selected={activeRightTab === 'AI'}
                 data-active={activeRightTab === 'AI'}
-                className={`clx-ai-btn relative z-10 h-8 rounded-full overflow-hidden cursor-pointer select-none transition-all duration-300 ${
+                title="Design with Clixio AI"
+                className={`clx-ai-btn relative z-10 h-8 rounded-full overflow-hidden cursor-pointer select-none transition-all duration-300 hover:-translate-y-px active:scale-[0.97] ${
                   activeRightTab === 'AI'
-                    ? 'shadow-[0_6px_18px_-6px_rgba(168,85,247,0.7)]'
-                    : 'hover:bg-white/60 dark:hover:bg-slate-700/60'
+                    ? 'shadow-[0_4px_12px_-4px_rgba(13,153,255,0.6)]'
+                    : 'shadow-[0_3px_10px_-5px_rgba(99,102,241,0.6)] hover:shadow-[0_6px_16px_-6px_rgba(168,85,247,0.7)]'
                 }`}
-                style={activeRightTab === 'AI' ? { background: 'linear-gradient(180deg, #05051a 0%, #0d0b2b 55%, #1a1240 100%)' } : undefined}
+                style={{ background: activeRightTab === 'AI' ? '#0d99ff' : 'linear-gradient(180deg, #05051a 0%, #0d0b2b 55%, #1a1240 100%)' }}
               >
-                {activeRightTab === 'AI' && (
+                {/* rainbow waves + glass only while not open — once clicked the tab is plain blue like Setup */}
+                {activeRightTab !== 'AI' && (
                 <>
                 <span aria-hidden className="clx-hue fx-pill-in">
                   <svg className="clx-wave clx-wave-glow" viewBox="0 0 200 40" preserveAspectRatio="none">
@@ -872,8 +958,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ activeRightTab
                 />
                 </>
                 )}
-                <span className={`relative flex items-center justify-center gap-1.5 text-[12px] ${activeRightTab === 'AI' ? 'font-semibold text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.6)]' : 'font-medium text-slate-500 dark:text-slate-400'}`}>
-                  <Sparkles className="w-3.5 h-3.5" />
+                <span className={`relative flex items-center justify-center gap-1.5 text-[12px] font-semibold text-white ${activeRightTab === 'AI' ? '' : '[text-shadow:0_1px_3px_rgba(0,0,0,0.6)]'}`}>
+                  <Sparkles className="w-3.5 h-3.5 clx-twinkle" />
                   Clixio AI
                 </span>
               </button>
@@ -1844,6 +1930,20 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ activeRightTab
         </section>
 
       </div>
+      )}
+      {/* Help & support — pinned to the bottom of the panel */}
+      {onOpenSupportModal && (
+        <div className="shrink-0 border-t border-slate-100 dark:border-slate-800 px-2 py-1.5 bg-white dark:bg-slate-900">
+          <button
+            type="button"
+            onClick={onOpenSupportModal}
+            title="Support, Requirements & Suggestions"
+            className="w-full h-8 px-2 rounded-lg flex items-center gap-2 text-[12px] font-medium text-slate-500 dark:text-slate-400 hover:text-[#0d99ff] hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+          >
+            <HelpCircle className="w-4 h-4 shrink-0" />
+            <span>Help & support</span>
+          </button>
+        </div>
       )}
       </div>
     </aside>

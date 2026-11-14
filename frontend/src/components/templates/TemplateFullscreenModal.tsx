@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useSmoothClose } from '../../hooks/useSmoothClose';
 import { StampTemplate } from '../../types/stamp';
 import { generateStampSvg } from '../../lib/svg-generator';
 import { STAMP_INK_COLORS } from '../../lib/units';
@@ -42,6 +43,13 @@ export const TemplateFullscreenModal: React.FC<TemplateFullscreenModalProps> = (
   const [distress, setDistress] = useState<boolean>(false);
   const [zoomScale, setZoomScale] = useState<number>(1.8);
   const [downloadToast, setDownloadToast] = useState<boolean>(false);
+  const { closing, close } = useSmoothClose(onClose, isOpen);
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, close]);
 
   // show each template in its own ink (the modal is created before any template is opened)
   useEffect(() => {
@@ -130,7 +138,10 @@ export const TemplateFullscreenModal: React.FC<TemplateFullscreenModalProps> = (
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-950/80 backdrop-blur-md fx-modal-backdrop">
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-950/80 backdrop-blur-md fx-modal-backdrop ${closing ? 'fx-modal-closing' : ''}`}
+      onMouseDown={(e) => e.target === e.currentTarget && close()}
+    >
       <div className="relative w-full max-w-5xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden text-slate-800 dark:text-slate-100 flex flex-col max-h-[92vh] fx-modal-open">
         {/* Top Header */}
         <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900 shrink-0">
@@ -157,7 +168,7 @@ export const TemplateFullscreenModal: React.FC<TemplateFullscreenModalProps> = (
           </div>
 
           <button
-            onClick={onClose}
+            onClick={close}
             className="p-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
             title="Close (Esc)"
           >

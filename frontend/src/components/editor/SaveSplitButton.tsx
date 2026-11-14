@@ -4,6 +4,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Cloud, Check, ChevronDown, BookmarkPlus, Loader2 } from 'lucide-react';
 import { useEditor } from '../../context/EditorContext';
 import { Tooltip } from '../common/Tooltip';
+import { useAuth } from '../../context/AuthContext';
+import { requireLogin } from '../../lib/require-login';
 
 /**
  * Toolbar save: the main part saves the design to the account; the ▾ part saves it as a
@@ -11,6 +13,7 @@ import { Tooltip } from '../common/Tooltip';
  */
 export const SaveSplitButton: React.FC = () => {
   const { saveProjectToCloud, saveAsTemplate, isSaving, hasUnsavedChanges, projectId, projectTitle, elements } = useEditor();
+  const { user } = useAuth();
   const needsSave = hasUnsavedChanges || !projectId; // "Saved" only once it really is on the account
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
@@ -76,6 +79,7 @@ export const SaveSplitButton: React.FC = () => {
         <button
           type="button"
           onClick={() => {
+            if (!requireLogin(user, 'save')) return; // guests: log in first
             setName(projectTitle);
             setOpen((v) => !v);
           }}

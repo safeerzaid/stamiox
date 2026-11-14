@@ -558,17 +558,14 @@ button, input, select, textarea {
     transform: scale(0.65);
     opacity: 0.85;
     background: radial-gradient(circle, rgba(13, 153, 255, 0.35) 0%, rgba(13, 153, 255, 0.1) 65%, transparent 100%);
-    box-shadow: 0 0 0 0 rgba(13, 153, 255, 0.45);
   }
   45% {
     opacity: 0.55;
     transform: scale(1.08);
-    box-shadow: 0 0 0 8px rgba(13, 153, 255, 0.22);
   }
   100% {
     transform: scale(1.35);
     opacity: 0;
-    box-shadow: 0 0 0 18px rgba(13, 153, 255, 0);
   }
 }
 
@@ -640,7 +637,7 @@ button, input, select, textarea {
 
 .fx-menu {
   transform-origin: top center;
-  animation: fxMenuIn 0.52s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation: fxMenuIn 0.62s cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 .fx-menu .fx-item {
   animation: fxItemIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards;
@@ -727,7 +724,7 @@ button, input, select, textarea {
 @media (prefers-reduced-motion: reduce) { .fx-panel { animation: none; } }
 
 /* ───────────── Bottom toolbar: advanced tool hover ─────────────
-   .fx-tool → cursor-following glow + growing bottom accent line.
+   .fx-tool → soft flat tint + growing bottom accent line.
    Purely decorative layers: the buttons keep their own scale / click animations. */
 .fx-tool { isolation: isolate; }
 .fx-tool::after {
@@ -736,9 +733,7 @@ button, input, select, textarea {
   inset: 0;
   z-index: -1;
   border-radius: inherit;
-  background:
-    radial-gradient(90px circle at var(--mx, 50%) var(--my, 50%), rgba(13, 153, 255, 0.18), transparent 65%),
-    linear-gradient(180deg, rgba(13, 153, 255, 0.06), rgba(13, 153, 255, 0.02));
+  background: rgba(13, 153, 255, 0.07); /* flat, even tint — no edge shading */
   opacity: 0;
   transition: opacity 0.3s ease;
   pointer-events: none;
@@ -808,8 +803,19 @@ button, input, select, textarea {
 .fx-modal-backdrop { animation: fxModalBackdrop 0.6s ease-out backwards; }
 .fx-modal-open { animation: fxModalOpen 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.1s backwards; }
 .fx-modal-stamp { animation: fxModalStamp 1.1s cubic-bezier(0.22, 1, 0.36, 1) 0.45s backwards; }
+/* …and closes smoothly: card sinks & fades, then the backdrop fades out */
+@keyframes fxModalBackdropOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes fxModalClose {
+  from { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+  to { opacity: 0; transform: translateY(18px) scale(0.95); filter: blur(3px); }
+}
+.fx-modal-closing { animation: fxModalBackdropOut 0.38s ease-in 0.04s forwards !important; pointer-events: none; }
+.fx-modal-closing > * { animation: fxModalClose 0.32s cubic-bezier(0.4, 0, 1, 1) forwards !important; }
+/* quicker close (e.g. the A4 stamp popup) */
+.fx-modal-closing.fx-close-fast { animation-duration: 0.2s !important; animation-delay: 0s !important; }
+.fx-modal-closing.fx-close-fast > * { animation-duration: 0.17s !important; }
 @media (prefers-reduced-motion: reduce) {
-  .fx-modal-backdrop, .fx-modal-open, .fx-modal-stamp { animation: none; }
+  .fx-modal-backdrop, .fx-modal-open, .fx-modal-stamp, .fx-modal-closing, .fx-modal-closing > * { animation: none !important; }
 }
 
 /* Setup / Clixio AI tabs: the panel opens slowly, sections follow one by one */
@@ -825,7 +831,7 @@ button, input, select, textarea {
   100% { opacity: 1; transform: scale(1); }
 }
 .fx-tab-in { animation: fxTabIn 0.7s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
-.fx-pop-in { animation: fxPopIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.fx-pop-in { animation: fxPopIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 .fx-tab-stagger { animation: none; }
 .fx-tab-stagger > * { animation: fxTabIn 0.7s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
 .fx-tab-stagger > *:nth-child(1) { animation-delay: 0.05s; }
@@ -841,3 +847,159 @@ button, input, select, textarea {
 
 /* Stamp previews in dark theme: black ink turns light (like the dark canvas) so it stays visible */
 html.dark .ink-preview { filter: invert(1) hue-rotate(180deg); }
+
+/* AI reply-language menu: rises & fades in from its button, rows follow one by one; quick fade on close */
+@keyframes fxLangIn {
+  0% { opacity: 0; transform: translateY(10px) scale(0.96); filter: blur(2px); }
+  100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+}
+@keyframes fxLangOut {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(6px) scale(0.97); }
+}
+@keyframes fxLangRow {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fx-lang-menu { transform-origin: bottom left; animation: fxLangIn 0.38s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.fx-lang-menu.is-closing { animation: fxLangOut 0.18s ease-in forwards; pointer-events: none; }
+.fx-lang-menu .fx-lang-row { animation: fxLangRow 0.4s cubic-bezier(0.16, 1, 0.3, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .fx-lang-menu, .fx-lang-menu.is-closing, .fx-lang-menu .fx-lang-row { animation: none; }
+}
+
+/* Editor: hand cursor over the selected element(s), closed hand while dragging them.
+   Resize / rotate handles keep their own cursors. */
+.fx-hand-grab,
+.fx-hand-grab .cursor-move { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 24 24' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8.5 12V6.5M11.5 11V4.5M14.5 11V5.5M17.5 12V7.5 M4.5 13l3 3' stroke='white' stroke-width='4.3' fill='none'/%3E%3Crect x='5.75' y='9.25' width='14.5' height='12.5' rx='4.75' fill='white'/%3E%3Cpath d='M8.5 12V6.5M11.5 11V4.5M14.5 11V5.5M17.5 12V7.5 M4.5 13l3 3' stroke='black' stroke-width='2.3' fill='none'/%3E%3Crect x='6.5' y='10' width='13' height='11' rx='4' fill='black'/%3E%3C/svg%3E") 14 14, grab !important; }
+.fx-hand-grabbing,
+.fx-hand-grabbing * { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 24 24' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8.5 12V9.5M11.5 11V8.5M14.5 11V8.5M17.5 12V9.5 M6 14l2 1.5' stroke='white' stroke-width='4.3' fill='none'/%3E%3Crect x='5.75' y='9.75' width='14.5' height='12' rx='4.75' fill='white'/%3E%3Cpath d='M8.5 12V9.5M11.5 11V8.5M14.5 11V8.5M17.5 12V9.5 M6 14l2 1.5' stroke='black' stroke-width='2.3' fill='none'/%3E%3Crect x='6.5' y='10.5' width='13' height='10.5' rx='4' fill='black'/%3E%3C/svg%3E") 14 14, grabbing !important; }
+
+/* ───────── Enter animations for `animate-in fade-in zoom-in-95 slide-in-from-*` ─────────
+   (the tailwindcss-animate plugin is not installed, so these classes were doing nothing and
+   windows / menus popped open instantly). Smooth, unhurried opening. */
+@keyframes fxEnter {
+  from {
+    opacity: var(--fx-enter-opacity, 1);
+    transform: translate3d(var(--fx-enter-x, 0), var(--fx-enter-y, 0), 0) scale(var(--fx-enter-scale, 1));
+  }
+}
+.animate-in { animation: fxEnter 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.fade-in { --fx-enter-opacity: 0; }
+.zoom-in-95 { --fx-enter-scale: 0.95; }
+.slide-in-from-bottom-2 { --fx-enter-y: 0.5rem; }
+.slide-in-from-bottom-3 { --fx-enter-y: 0.75rem; }
+.slide-in-from-left-2 { --fx-enter-x: -0.5rem; }
+/* a window's backdrop fades a little quicker than the window itself */
+.fixed.inset-0.animate-in { animation-duration: 0.45s; }
+/* the window inside a backdrop rises and grows in gently (unless it has its own animation) */
+.fixed.inset-0.animate-in > :not(.fx-menu):not(.fx-modal-open):not(.fx-panel) {
+  --fx-enter-opacity: 0;
+  --fx-enter-scale: 0.95;
+  --fx-enter-y: 12px;
+  animation: fxEnter 0.65s cubic-bezier(0.22, 1, 0.36, 1) 0.05s both;
+}
+@media (prefers-reduced-motion: reduce) { .animate-in { animation: none; } }
+
+/* Tooltips: a quick, soft fade (they're positioned with left/top, so no transform conflict) */
+@keyframes fxTipIn { from { opacity: 0; } to { opacity: 1; } }
+.fx-tip-in { animation: fxTipIn 0.18s ease-out both; }
+@media (prefers-reduced-motion: reduce) { .fx-tip-in { animation: none; } }
+
+/* ───────────────── Website dark mode ─────────────────
+   The website pages (home, pricing, templates, blogs…) were built light-only. In dark mode these
+   rules map their light colours to dark ones. Scoped to html[data-area="site"], so the Studio
+   (which has its own dark styles) is never touched. Stamp previews stay light, like paper. */
+html.dark[data-area='site'] {
+  --site-bg: #0b0f19;
+  --site-card: #111827;
+  --site-raised: #1e293b;
+  --site-border: #1f2937;
+  --site-text: #f1f5f9;
+  --site-text-2: #cbd5e1;
+  --site-muted: #94a3b8;
+}
+
+/* page & section backgrounds */
+html.dark[data-area='site'] section.bg-white,
+html.dark[data-area='site'] footer.bg-white,
+html.dark[data-area='site'] main > div.bg-white,
+html.dark[data-area='site'] main > .min-h-screen { background-color: var(--site-bg); }
+html.dark[data-area='site'] section.bg-slate-50,
+html.dark[data-area='site'] section.bg-\[\#f8fafc\],
+html.dark[data-area='site'] section.bg-\[\#fafafa\] { background-color: #0d1220; }
+
+/* cards & panels (not buttons, links or small white badges/avatars) */
+html.dark[data-area='site'] .bg-white:not(section):not(footer):not(button):not(a):not(.rounded-full) { background-color: var(--site-card); }
+html.dark[data-area='site'] .bg-slate-50:not(section),
+html.dark[data-area='site'] .bg-\[\#f1f3f4\],
+html.dark[data-area='site'] .bg-slate-100 { background-color: var(--site-raised); }
+html.dark[data-area='site'] .bg-white\/80,
+html.dark[data-area='site'] .bg-white\/90,
+html.dark[data-area='site'] .bg-white\/95 { background-color: rgba(17, 24, 39, 0.82); }
+html.dark[data-area='site'] .bg-gradient-to-b.from-white\/90 { background-image: none; background-color: rgba(17, 24, 39, 0.72); }
+html.dark[data-area='site'] .bg-blue-50 { background-color: rgba(37, 99, 235, 0.14); }
+html.dark[data-area='site'] .bg-emerald-50\/80 { background-color: rgba(16, 185, 129, 0.14); }
+
+/* hover backgrounds */
+html.dark[data-area='site'] .hover\:bg-slate-50:hover,
+html.dark[data-area='site'] .hover\:bg-slate-100:hover,
+html.dark[data-area='site'] .hover\:bg-\[\#e8eaed\]:hover { background-color: var(--site-raised); }
+
+/* text */
+html.dark[data-area='site'] .text-slate-900,
+html.dark[data-area='site'] .text-\[\#111827\],
+html.dark[data-area='site'] .text-\[\#202124\],
+html.dark[data-area='site'] .text-\[\#2d3135\],
+html.dark[data-area='site'] .text-slate-800 { color: var(--site-text); }
+html.dark[data-area='site'] .text-slate-700,
+html.dark[data-area='site'] .text-slate-600 { color: var(--site-text-2); }
+html.dark[data-area='site'] .text-\[\#5f6368\],
+html.dark[data-area='site'] .text-slate-500 { color: var(--site-muted); }
+html.dark[data-area='site'] .hover\:text-slate-900:hover,
+html.dark[data-area='site'] .hover\:text-\[\#111827\]:hover,
+html.dark[data-area='site'] .hover\:text-black:hover { color: #ffffff; }
+/* text sitting on something that stays white (buttons, white badges) keeps its dark colour */
+html.dark[data-area='site'] button.bg-white, html.dark[data-area='site'] button.bg-white *,
+html.dark[data-area='site'] a.bg-white, html.dark[data-area='site'] a.bg-white *,
+html.dark[data-area='site'] .rounded-full.bg-white, html.dark[data-area='site'] .rounded-full.bg-white * { color: #0b0f19; }
+
+/* borders & dividers */
+html.dark[data-area='site'] .border-slate-200,
+html.dark[data-area='site'] .border-slate-200\/80,
+html.dark[data-area='site'] .border-slate-200\/90,
+html.dark[data-area='site'] .border-slate-200\/60,
+html.dark[data-area='site'] .border-slate-100,
+html.dark[data-area='site'] .border-white\/80 { border-color: var(--site-border); }
+html.dark[data-area='site'] .ring-white\/90 { --tw-ring-color: rgba(255, 255, 255, 0.06); }
+
+/* edge fades of the template carousel */
+html.dark[data-area='site'] .from-slate-50 { --tw-gradient-from: #0d1220 var(--tw-gradient-from-position); --tw-gradient-to: rgb(13 18 32 / 0) var(--tw-gradient-to-position); --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to); }
+html.dark[data-area='site'] .via-slate-50\/80 { --tw-gradient-to: rgb(13 18 32 / 0) var(--tw-gradient-to-position); --tw-gradient-stops: var(--tw-gradient-from), rgb(13 18 32 / 0.8) var(--tw-gradient-via-position), var(--tw-gradient-to); }
+
+/* hero: the black "Start designing" button turns light; the glow is softer on a dark page */
+html.dark[data-area='site'] .bg-\[\#111111\] { background-color: #f8fafc; }
+html.dark[data-area='site'] .bg-\[\#111111\], html.dark[data-area='site'] .bg-\[\#111111\] * { color: #0b0f19; }
+html.dark[data-area='site'] .hover\:bg-\[\#282828\]:hover { background-color: #e2e8f0; }
+html.dark[data-area='site'] .from-\[\#fde047\]\/70 { opacity: 0.28; }
+html.dark[data-area='site'] .from-\[\#3b82f6\]\/40 { opacity: 0.6; }
+/* drawings inside boxes that stay light (stamp icons / previews) keep their dark ink */
+html.dark[data-area='site'] .from-white .text-slate-900,
+html.dark[data-area='site'] .bg-\[\#f8f9fa\] .text-slate-900 { color: #111827; }
+html.dark[data-area='site'] .bg-amber-50 { background-color: rgba(245, 158, 11, 0.14); }
+
+/* Home "two ways" cards: lift a little and glow in their own colour on hover */
+.card-lift { transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.45s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.3s ease; }
+.card-lift:hover { transform: translateY(-6px); }
+/* black card: soft white glow + bright edge (plus a deep shadow so it shows on a white page too) */
+.card-glow-dark:hover {
+  box-shadow: 0 30px 60px -20px rgba(15, 23, 42, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.16) inset, 0 0 48px -6px rgba(255, 255, 255, 0.22);
+}
+/* blue card: soft blue glow */
+.card-glow-blue:hover {
+  box-shadow: 0 30px 60px -18px rgba(37, 99, 235, 0.6), 0 0 56px -6px rgba(59, 130, 246, 0.45);
+}
+@media (prefers-reduced-motion: reduce) { .card-lift:hover { transform: none; } }
+/* paragraphs on dark / coloured cards keep their white text in dark mode (the global p colour would grey them) */
+html.dark[data-area='site'] p.text-white\/80 { color: rgba(255, 255, 255, 0.8); }
+html.dark[data-area='site'] p.text-white\/70 { color: rgba(255, 255, 255, 0.7); }

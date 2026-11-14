@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useSmoothClose } from '../../hooks/useSmoothClose';
 import { StampTemplate, StampElement } from '../../types/stamp';
 import { generateStampSvg } from '../../lib/svg-generator';
 import { STAMP_INK_COLORS } from '../../lib/units';
@@ -42,6 +43,14 @@ export const QuickCustomizerModal: React.FC<QuickCustomizerModalProps> = ({
       setElements(JSON.parse(JSON.stringify(template.defaultData.elements || [])));
     }
   }, [template]);
+
+  const { closing, close } = useSmoothClose(onClose, isOpen);
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, close]);
 
   if (!isOpen || !template) return null;
 
@@ -113,7 +122,10 @@ export const QuickCustomizerModal: React.FC<QuickCustomizerModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 dark:bg-black/70 backdrop-blur-sm animate-in fade-in">
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 dark:bg-black/70 backdrop-blur-sm animate-in fade-in ${closing ? 'fx-modal-closing' : ''}`}
+      onMouseDown={(e) => e.target === e.currentTarget && close()}
+    >
       <div className="relative w-full max-w-4xl bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
@@ -131,7 +143,7 @@ export const QuickCustomizerModal: React.FC<QuickCustomizerModalProps> = ({
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={close}
             className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
           >
             <X className="w-5 h-5" />

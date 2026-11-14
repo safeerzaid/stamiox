@@ -1,5 +1,6 @@
 'use client';
 
+import { requireLogin } from '../../lib/require-login';
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
@@ -101,6 +102,10 @@ export const OneClickStampModal: React.FC<OneClickStampModalProps> = ({
 
   const handlePrintOne = (variation: GeneratedStampVariation, e: React.MouseEvent) => {
     e.stopPropagation();
+    // printing is an export — guests log in first
+    let signedIn = false;
+    try { signedIn = !!localStorage.getItem('stamiox_auth_token'); } catch { /* ignore */ }
+    if (!requireLogin(signedIn, 'export')) return;
     const rawSvg = generateStampSvg({
       widthMm: variation.widthMm,
       heightMm: variation.heightMm,

@@ -14,9 +14,13 @@ import { ExportModal } from '../../components/editor/ExportModal';
 import { SupportModal } from '../../components/common/SupportModal';
 import { ARRealWorldModal } from '../../components/editor/ARRealWorldModal';
 import { InteractiveDesignModal } from '../../components/editor/InteractiveDesignModal';
+import { RecentDesignsModal } from '../../components/editor/RecentDesignsModal';
+import { LoginPromptModal } from '../../components/editor/LoginPromptModal';
+import { requireLogin } from '../../lib/require-login';
 
 function EditorPage() {
   const { viewMode, viewRestored, loadAiGeneratedStamp } = useEditor();
+  const { user } = useAuth();
   const [activeView, setActiveView] = useState(viewMode);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [isClipartModalOpen, setIsClipartModalOpen] = useState<boolean>(false);
@@ -85,8 +89,10 @@ function EditorPage() {
         {/* Top Header Bar with Start with AI / Close AI button */}
         <Toolbar
           onOpenClipartModal={() => setIsClipartModalOpen(true)}
-          onOpenExportModal={() => setIsExportModalOpen(true)}
-          onOpenSupportModal={() => setIsSupportModalOpen(true)}
+          onOpenExportModal={() => {
+            // guests can design freely; exporting needs an account
+            if (requireLogin(user, 'export')) setIsExportModalOpen(true);
+          }}
         />
 
         {/* View Mode Switching with Futuristic Transition */}
@@ -113,6 +119,7 @@ function EditorPage() {
               <PropertiesPanel 
                 activeRightTab={activeRightTab}
                 setActiveRightTab={setActiveRightTab}
+                onOpenSupportModal={() => setIsSupportModalOpen(true)}
               />
             </div>
           </div>
@@ -144,6 +151,11 @@ function EditorPage() {
         onClose={() => setIsARModalOpen(false)}
       />
 
+      {/* Recent designs — shown when the Studio is opened, to continue a previous design */}
+      {user && <RecentDesignsModal />}
+      {/* "Log in to continue" for guests (export, save, more designs) */}
+      <LoginPromptModal />
+
       {/* Interactive Design Selector (Style, Shape, Content Preset) */}
       <InteractiveDesignModal
         isOpen={isInteractiveModalOpen}
@@ -153,24 +165,17 @@ function EditorPage() {
   );
 }
 
-/** The Studio is for registered users only — everyone else is sent to Register first. */
+/**
+ * The Studio is open to everyone: guests get a free trial of a few designs, and logging in is
+ * asked for when they export, save to an account, or want more designs.
+ */
 export default function EditorGate() {
-  const { user, isLoading } = useAuth();
-  const router = useRouter();
-  useEffect(() => {
-    if (!isLoading && !user) {
-      // people who already have an account here get Log in; newcomers get Register
-      let known = false;
-      try { known = localStorage.getItem('stamiox_has_account') === '1'; } catch { /* ignore */ }
-      router.replace(`/login?tab=${known ? 'login' : 'register'}&next=/editor`);
-    }
-  }, [isLoading, user, router]);
-
-  if (isLoading || !user) {
+  const { isLoading } = useAuth();
+  if (isLoading) {
     return (
       <div className="h-screen w-full flex flex-col items-center justify-center gap-3 bg-[#f5f5f5] dark:bg-[#0b0f19]">
         <span className="w-6 h-6 rounded-full border-2 border-slate-300 border-t-[#0d99ff] animate-spin" />
-        <span className="text-[13px] text-slate-500 dark:text-slate-400">{isLoading ? 'Checking your account…' : 'Please register or log in to open the Studio'}</span>
+        <span className="text-[13px] text-slate-500 dark:text-slate-400">Opening the Studio…</span>
       </div>
     );
   }

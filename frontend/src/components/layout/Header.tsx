@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronRight,
   Layers,
+  Plus,
   CreditCard,
   LogOut,
   Clock,
@@ -295,7 +296,15 @@ export const Header: React.FC = () => {
         <div className="flex items-center gap-3">
           <ThemeToggle size="sm" />
           {user ? (
-            /* User Profile if Logged In */
+            /* Logged in: one-click "Start Designing" + profile menu */
+            <div className="flex items-center gap-3">
+            <Link
+              href="/editor"
+              className="hidden sm:inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full bg-slate-900 hover:bg-slate-800 text-white text-[14.5px] font-semibold transition-all duration-200 hover:scale-[1.02] shadow-sm hover:shadow"
+            >
+              <Plus className="w-4 h-4" strokeWidth={2.4} />
+              Start Designing
+            </Link>
             <div className="relative" ref={userMenuRef}>
               <button
                 onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
@@ -325,7 +334,10 @@ export const Header: React.FC = () => {
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="font-bold text-slate-900 text-sm truncate leading-tight">{user.name}</p>
-                        <p className="text-slate-400 text-xs truncate font-medium mt-0.5">{user.email}</p>
+                        {/* accounts made with a mobile number get a placeholder email — show the number instead */}
+                        <p className="text-slate-400 text-xs truncate font-medium mt-0.5 tabular-nums">
+                          {user.email && !user.email.endsWith('@users.stamiox.local') ? user.email : (user as any).mobile || ''}
+                        </p>
                       </div>
                     </div>
 
@@ -391,6 +403,7 @@ export const Header: React.FC = () => {
                   </button>
                 </div>
               )}
+            </div>
             </div>
           ) : (
             <div className="flex items-center gap-3.5">

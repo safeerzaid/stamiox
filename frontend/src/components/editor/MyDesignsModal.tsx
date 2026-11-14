@@ -5,6 +5,7 @@ import { X, Search, Trash2, FolderOpen, Loader2 } from 'lucide-react';
 import { ApiService } from '../../lib/api';
 import { generateStampSvg } from '../../lib/svg-generator';
 import { useEditor } from '../../context/EditorContext';
+import { useSmoothClose } from '../../hooks/useSmoothClose';
 
 type Tab = 'designs' | 'templates';
 
@@ -26,6 +27,7 @@ export const MyDesignsModal: React.FC<{ isOpen: boolean; onClose: () => void; in
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const { closing, close } = useSmoothClose(onClose, isOpen);
 
   const refresh = async () => {
     setLoading(true);
@@ -51,10 +53,10 @@ export const MyDesignsModal: React.FC<{ isOpen: boolean; onClose: () => void; in
 
   useEffect(() => {
     if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, onClose]);
+  }, [isOpen, close]);
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -104,7 +106,7 @@ export const MyDesignsModal: React.FC<{ isOpen: boolean; onClose: () => void; in
     } else {
       loadProject(p);
     }
-    onClose();
+    close();
   };
 
   const remove = async (id: string) => {
@@ -118,7 +120,7 @@ export const MyDesignsModal: React.FC<{ isOpen: boolean; onClose: () => void; in
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm fx-modal-backdrop" onMouseDown={onClose}>
+    <div className={`fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm fx-modal-backdrop ${closing ? 'fx-modal-closing' : ''}`} onMouseDown={close}>
       <div
         role="dialog"
         aria-modal="true"
@@ -128,36 +130,19 @@ export const MyDesignsModal: React.FC<{ isOpen: boolean; onClose: () => void; in
       >
         {/* header */}
         <div className="flex items-center justify-between px-5 pt-4 pb-3">
-          <h2 className="text-[16px] font-semibold text-slate-900 dark:text-white">My designs</h2>
-          <button type="button" onClick={onClose} aria-label="Close" className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer">
+          <h2 className="text-[16px] font-semibold text-slate-900 dark:text-white">
+            {tab === 'templates' ? 'My templates' : 'My designs'}
+            {counts[tab] > 0 && <span className="ml-2 text-[13px] font-medium text-slate-400 tabular-nums">{counts[tab]}</span>}
+          </h2>
+          <button type="button" onClick={close} aria-label="Close" className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* tabs + search */}
-        <div className="flex items-center gap-2 px-5 pb-3">
-          <div role="tablist" className="flex p-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-[13px]">
-            {([
-              { id: 'designs', label: 'Designs' },
-              { id: 'templates', label: 'Templates' },
-            ] as const).map(({ id, label }) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={tab === id}
-                onClick={() => setTab(id)}
-                className={`h-8 px-3.5 rounded-md font-medium transition-colors cursor-pointer ${
-                  tab === id ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800'
-                }`}
-              >
-                {label}
-                {counts[id] > 0 && <span className="ml-1.5 text-[11px] text-slate-400 tabular-nums">{counts[id]}</span>}
-              </button>
-            ))}
-          </div>
-          {counts[tab] > 6 && (
-            <div className="ml-auto flex items-center gap-2 h-9 px-3 rounded-lg bg-slate-100 dark:bg-slate-800 w-48">
+        {/* search (only when there are many) */}
+        {counts[tab] > 6 && (
+        <div className="px-5 pb-3">
+            <div className="flex items-center gap-2 h-9 px-3 rounded-lg bg-slate-100 dark:bg-slate-800 w-full sm:w-64">
               <Search className="w-4 h-4 text-slate-400 shrink-0" />
               <input
                 value={query}
@@ -166,8 +151,8 @@ export const MyDesignsModal: React.FC<{ isOpen: boolean; onClose: () => void; in
                 className="flex-1 min-w-0 bg-transparent outline-none text-[13px] text-slate-900 dark:text-white placeholder:text-slate-400"
               />
             </div>
-          )}
         </div>
+        )}
 
         {error && <p className="mx-5 mb-2 text-[12px] text-rose-600 dark:text-rose-400">{error}</p>}
 

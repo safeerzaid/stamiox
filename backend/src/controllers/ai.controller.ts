@@ -1,9 +1,207 @@
 import { Request, Response } from 'express';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import crypto from 'crypto';
-import { ELEMENT_SCHEMA, normalizeElements, sameDesign } from './ai-elements';
+import { ELEMENT_SCHEMA, normalizeElements, sameDesign, printCheck, enforceProduction, keepLogoProportions, sanitizeStampSize } from './ai-elements';
+import { buildCategoryDesign, offlineSpec, specFromBrief, buildVariations, type BuiltDesign } from './stamp-layouts';
+import { languageRule, offlineLanguage } from '../data/languages';
 
 const uuidv4 = () => crypto.randomUUID();
+
+/**
+ * Final production check on every design the AI hands back (AI behaviour rules 5, 9, 10):
+ * elements this answer created or changed get the print minimums (lines ≥ 0.3 mm, text ≥ 2 mm)
+ * and are shrunk to fit the stamp; then the print check reports anything still not right.
+ * `before` = the design before this answer (an edit) — only what changed is adjusted / reported.
+ */
+function withPrintCheck<T extends { elements?: any[]; widthMm?: number; heightMm?: number; shape?: string; printWarnings?: string[] }>(r: T, before?: any): T {
+  if (Array.isArray(r.elements) && r.elements.length) {
+    const W = Number(r.widthMm) || Number(before?.widthMm) || 40;
+    const H = Number(r.heightMm) || Number(before?.heightMm) || 40;
+    const shape = r.shape || before?.shape;
+    let changed: Set<string> | undefined;
+    if (Array.isArray(before?.elements) && before.elements.length) {
+      const old = new Map(before.elements.map((e: any) => [String(e.id), JSON.stringify(e)]));
+      changed = new Set(r.elements.filter((e: any) => old.get(String(e.id)) !== JSON.stringify(e)).map((e: any) => String(e.id)));
+    }
+    const notes = enforceProduction(r.elements, W, H, shape, changed);
+    let warnings = printCheck(r.elements, W, H, shape);
+    // only problems this answer created — the same warning isn't repeated after every message
+    if (Array.isArray(before?.elements) && before.elements.length) {
+      const old = new Set(printCheck(before.elements, Number(before.widthMm) || 40, Number(before.heightMm) || 40, before.shape));
+      warnings = warnings.filter((w) => !old.has(w));
+    }
+    warnings = [...notes, ...warnings];
+    if (warnings.length) r.printWarnings = warnings;
+  }
+  return r;
+}
+
+/**
+ * Is this message asking to change the stamp SHAPE ("make it round", "ee square shape ne round
+ * akuka", "oval aakku", "change to rectangle")? Returns the shape it should become, or null.
+ * The last shape word is the target ("square ne round akuka" → ROUND, "square to round" → ROUND).
+ * A request for a new stamp ("create a round seal for …") is not a shape change.
+ */
+const SHAPE_WORDS: Array<[RegExp, 'ROUND' | 'OVAL' | 'SQUARE' | 'RECTANGULAR']> = [
+  [/\b(?:round|rownd|circle|circular|vattam|vatta|urunda)\b|വട്ട/gi, 'ROUND'],
+  [/\b(?:oval|ovel|ovle|ellipse|mutta)\b|ഓവൽ/gi, 'OVAL'],
+  [/\b(?:square|sqaure|sqare|squre|samachathuram)\b|സമചതുര/gi, 'SQUARE'],
+  [/\b(?:rect|rectangle|rectangular|neelam|neela\s*chathuram|chathuram)\b|ചതുര/gi, 'RECTANGULAR'],
+];
+export function detectShapeChange(prompt: string, understood?: string): 'ROUND' | 'OVAL' | 'SQUARE' | 'RECTANGULAR' | null {
+  const text = `${prompt || ''}`;
+  const lower = text.toLowerCase();
+  // asking for a whole new stamp, or about something else that happens to be round (a round logo, a circle around text…)
+  if (/\b(?:new|create|puthiya|puthiyath|generate|design\s+a|make\s+a|oru)\b/i.test(lower) && !/\bshape\b/i.test(lower)) return null;
+  if (/\b(?:logo|text|star|icon|border|ring|line)\b/i.test(lower) && !/\b(?:stamp|shape|seal|it|ith|ithine|athine)\b/i.test(lower)) return null;
+  const verb = /\b(?:shape|make|change|convert|turn|switch|to|into|aakk\w*|akk\w*|aaku\w*|aku\w*|maatt\w*|matt\w*|venam|cheyy\w*)\b|ആക്ക|മാറ്റ/i;
+  const find = (s: string) => {
+    let best: { at: number; shape: 'ROUND' | 'OVAL' | 'SQUARE' | 'RECTANGULAR' } | null = null;
+    for (const [re, shape] of SHAPE_WORDS) {
+      for (const m of s.matchAll(re)) if (!best || (m.index ?? 0) > best.at) best = { at: m.index ?? 0, shape };
+    }
+    return best?.shape ?? null;
+  };
+  if (!verb.test(text)) return null;
+  const fromPrompt = find(text);
+  if (fromPrompt) return fromPrompt;
+  // a message the AI had to decode (typos / other scripts): trust its clean English version
+  if (understood && /\bshape\b/i.test(understood)) return find(understood);
+  return null;
+}
+
+/**
+ * Removes lines from a new-stamp spec that the user never gave: every word of a line (3+ letters,
+ * ignoring common labels) must appear in what the user wrote. The main name, the "For …" line,
+ * the designation and the status word are kept (the AI may tidy their spelling / case). Returns
+ * the dropped lines.
+ */
+const LABEL_WORDS = new Set(['GST', 'GSTIN', 'CIN', 'REG', 'REGD', 'NO', 'PH', 'PHONE', 'MOB', 'TEL', 'EMAIL', 'MAIL', 'WEB', 'PIN', 'DATE', 'SIGN', 'SEAL', 'THE', 'AND', 'FOR', 'LTD', 'PVT', 'LLP', 'INC', 'CO']);
+function dropInventedTexts(spec: any, said: string): string[] {
+  const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9ऀ-෿]+/g, ' ');
+  const source = ` ${norm(said)} `;
+  // a word counts as given if it (or its first 4 letters, for small spelling fixes) is in the user's text
+  const given = (w: string) => source.includes(` ${w} `) || (w.length >= 5 && source.includes(w.slice(0, 4))) || /^\d+$/.test(w) && source.includes(w);
+  const invented = (line: string) => {
+    const words = norm(line).split(' ').filter((w) => w.length >= 3 && !LABEL_WORDS.has(w));
+    return words.length > 0 && words.every((w) => !given(w));
+  };
+  const dropped: string[] = [];
+  const keep = (v: any) => {
+    if (typeof v !== 'string' || !v.trim()) return true;
+    if (invented(v)) { dropped.push(v); return false; }
+    return true;
+  };
+  if (Array.isArray(spec.centerLines)) spec.centerLines = spec.centerLines.filter(keep);
+  if (Array.isArray(spec.lines)) spec.lines = [spec.lines[0], ...spec.lines.slice(1).filter(keep)].filter((x) => x !== undefined);
+  if (typeof spec.bottomText === 'string' && !keep(spec.bottomText)) spec.bottomText = '';
+  if (typeof spec.extraLine === 'string' && !keep(spec.extraLine)) delete spec.extraLine;
+  return dropped;
+}
+
+/** Ink colours a user can name in one word (English / Manglish). */
+const INK_WORDS: Array<[RegExp, string, string]> = [
+  [/\b(?:red|chuvapp\w*|chuvanna)\b/i, '#990000', 'red'],
+  [/\b(?:blue|neela|neelam|neelayil)\b/i, '#003399', 'blue'],
+  [/\b(?:black|karupp\w*|karutha)\b/i, '#111827', 'black'],
+  [/\b(?:green|pacha)\b/i, '#007A3D', 'green'],
+  [/\b(?:violet|purple|vayalet)\b/i, '#5b21b6', 'violet'],
+  [/\b(?:brown|coffee)\b/i, '#7c2d12', 'brown'],
+];
+// a request about the whole layout's alignment (not "shari / sheri" alone — in Manglish that also means "ok / correct")
+// (typos included: "aligment", "alinment", "allignment", "alignmnet")
+const ALIGN_WORDS = /\b(?:al+ig?n\w*|al+igm\w*|al+ain\w*|layout|lay\s*out|arrange\w*|arrang\w*)\b/i;
+
+/**
+ * Instant answers — no AI call at all — for the simple commands the editor can carry out by
+ * itself: a shape change, "fix the alignment", a one-word ink colour. Only for English / Manglish
+ * (other languages go to the AI so the reply is in their language). Null = ask the AI.
+ */
+function instantAnswer(prompt: string, currentDesign: any, language: string | undefined): AiStampGeneratedPayload | null {
+  const els = currentDesign?.elements;
+  if (!Array.isArray(els) || !els.length) return null;
+  if (language && !['AUTO', 'ENGLISH', 'MANGLISH'].includes(language)) return null;
+  const lang = offlineLanguage(language, prompt);
+  if (lang === 'MALAYALAM') return null;
+  // Manglish also when typed loosely ("akuka", "shariyaakku", "ne", "venam")
+  const manglishHint = /\b(?:aak\w*|akk\w*|aku\w*|ak[ui]ka|cheyy\w*|venam|ne|nte|ithu|ith|athu|ee|maatt\w*|matt\w*|shari\w*|sheri\w*|niram|vattam|mutta)\b/i;
+  const ml = lang === 'MANGLISH' || (language !== 'ENGLISH' && manglishHint.test(prompt));
+  const p = prompt.trim();
+  const words = p.split(/\s+/).length;
+  // anything that also asks for something else (text, size, adding / removing…) needs the AI
+  const otherEdit = /\b(?:text|name|add|remove|delete|bigger|smaller|size|font|logo|star|border|thick|thin|move|mm|save|export|download|pdf|png|svg)\b/i;
+
+  const target = detectShapeChange(p);
+  if (target && words <= 10 && !/\d/.test(p) && !otherEdit.test(p.replace(/\b(?:shape|stamp)\b/gi, ''))) {
+    const name = { ROUND: 'round', OVAL: 'oval', SQUARE: 'square', RECTANGULAR: 'rectangle' }[target];
+    return {
+      action: 'SURGICAL_EDIT', shape: target, elements: els,
+      reply: ml ? `Done! Stamp ${name} shape aakki.` : `Done! The stamp is ${name} now.`,
+      summary: `Shape changed to ${name}`, understood: `Change the stamp shape to ${name}`,
+      suggestedFollowUps: ml ? ['Ink colour maattu', 'Alignment shariyaakku'] : ['Change ink colour', 'Fix the alignment'],
+    };
+  }
+  if (ALIGN_WORDS.test(p) && words <= 10 && !otherEdit.test(p.replace(/\b(?:text|name)\b/gi, '')) && !/\b(?:left|right|edath\w*|valath\w*)\b/i.test(p)) {
+    return {
+      action: 'SURGICAL_EDIT', doRealign: true, elements: els,
+      reply: ml ? 'Done! Alignment shariyaakki.' : 'Done! The layout is re-aligned.',
+      summary: 'Layout re-aligned', understood: 'Fix the alignment of the stamp',
+      suggestedFollowUps: [],
+    };
+  }
+  const inks = INK_WORDS.filter(([re]) => re.test(p));
+  if (inks.length === 1 && words <= 6 && /\b(?:ink|colou?r|niram|aakk\w*|akk\w*|aaku\w*|make|change|maatt\w*|to)\b/i.test(p) && !otherEdit.test(p)) {
+    const [, hex, name] = inks[0];
+    return {
+      action: 'SURGICAL_EDIT', inkColor: hex, elements: els,
+      reply: ml ? `Done! Ink ${name} aakki.` : `Done! The ink is ${name} now.`,
+      summary: `Ink ${name}`, understood: `Make the ink ${name}`,
+      suggestedFollowUps: [],
+    };
+  }
+  return null;
+}
+
+/** Logo stamp: put the logo already on the canvas into the centre of a new seal, undistorted. */
+function placeExistingLogo(built: BuiltDesign, currentDesign: any) {
+  const logo = (currentDesign?.elements || []).find((e: any) => e?.type === 'image' && e.src);
+  if (!logo) return;
+  const box = Math.min(built.widthMm, built.heightMm) * 0.34;
+  const ratio = (Number(logo.width) || 1) / (Number(logo.height) || 1);
+  const w = ratio >= 1 ? box : box * ratio;
+  const h = ratio >= 1 ? box / ratio : box;
+  built.elements.push({ ...logo, x: +((built.widthMm - w) / 2).toFixed(2), y: +((built.heightMm - h) / 2).toFixed(2), width: +w.toFixed(2), height: +h.toFixed(2) });
+}
+
+/**
+ * Applies the AI's edit patch to the current design: { update: [{id, ...changed props}],
+ * add: [new elements], remove: [ids] }. Elements it doesn't mention are kept exactly as they are.
+ */
+function applyDesignChanges(current: any[], changes: any): any[] {
+  const asList = (v: any) => (Array.isArray(v) ? v : v ? [v] : []);
+  const removeIds = new Set(asList(changes?.remove).map((x: any) => String(typeof x === 'object' && x ? x.id : x)));
+  const updates = new Map<string, any>();
+  for (const u of asList(changes?.update)) {
+    if (u && u.id != null) updates.set(String(u.id), { ...(updates.get(String(u.id)) || {}), ...u });
+  }
+  const out = current
+    .filter((el) => !removeIds.has(String(el.id)))
+    .map((el) => {
+      const u = updates.get(String(el.id));
+      if (!u) return el;
+      const { id: _id, type: _type, note: _note, src: _src, maskSrc: _mask, ...props } = u; // never the id, type or the picture itself
+      return keepLogoProportions(el, { ...el, ...props }); // a logo is never stretched
+    });
+  const used = new Set(out.map((el) => String(el.id)));
+  for (const a of asList(changes?.add)) {
+    if (!a || typeof a !== 'object' || !a.type) continue;
+    let id = a.id != null ? String(a.id) : '';
+    if (!id || used.has(id)) id = `${a.type}-${uuidv4().slice(0, 8)}`; // keep ids unique
+    used.add(id);
+    out.push({ ...a, id });
+  }
+  return JSON.parse(JSON.stringify(out));
+}
 
 export interface AiStampGeneratedPayload {
   action?: 'CONVERSATION' | 'SURGICAL_EDIT' | 'GENERATE_NEW' | 'UPDATE_A4_SETTINGS' | 'ADD_A4_COPIES';
@@ -17,7 +215,23 @@ export interface AiStampGeneratedPayload {
   reply?: string;
   summary?: string;
   suggestedFollowUps?: string[];
+  /** the user's request as the AI understood it (spelling fixed) — shown under the message */
+  understood?: string;
+  /** the user asked to fix the alignment — the editor re-aligns the layout itself */
+  doRealign?: boolean;
+  /** the user asked to save to the account / download a file — the editor does it */
+  doSave?: boolean;
+  doExport?: 'pdf' | 'png' | 'svg';
+  /** negative stamp (white text on solid ink) / mirrored artwork for engraving — only when asked */
+  laserInvert?: boolean;
+  laserMirror?: boolean;
+  /** plain-language print problems found on the real stamp size */
+  printWarnings?: string[];
+  /** new designs: professional alternatives with the same texts (the user picks one) */
+  variations?: Array<{ label: string; shape: string; widthMm: number; heightMm: number; inkColor: string; elements: any[] }>;
   elements?: any[];
+  /** edit patch from the model — merged into `elements` before the reply leaves the server */
+  changes?: { update?: any[]; add?: any[]; remove?: any[] };
 }
 
 /**
@@ -26,6 +240,8 @@ export interface AiStampGeneratedPayload {
 export class AiStampService {
   /** Why the last Gemini call failed (for an honest message to the user). */
   private static lastAiFailure: 'quota' | 'busy' | 'other' | null = null;
+  /** model → time until which it is skipped (its quota ran out) */
+  private static quotaUntil = new Map<string, number>();
 
   /**
    * Unified Antigravity-Level Agentic Reasoning Processor with Multi-Turn Conversational Memory
@@ -40,6 +256,23 @@ export class AiStampService {
   ): Promise<AiStampGeneratedPayload> {
     const rawPrompt = prompt.trim();
     const geminiKey = process.env.GEMINI_API_KEY;
+    const offline = offlineLanguage(language, rawPrompt);
+
+    console.log('💬 request:', JSON.stringify(rawPrompt.slice(0, 100)));
+    // development aid: the design the last request was made on (to trace "it didn't change" reports)
+    if (process.env.NODE_ENV !== 'production') {
+      try {
+        const { src: _s, ...lite } = currentDesign || ({} as any);
+        const els = (currentDesign?.elements || []).map(({ src: _a, maskSrc: _b, svgPath: _c, ...e }: any) => e);
+        require('fs').writeFileSync(require('path').join(require('os').tmpdir(), 'stamiox-last-request.json'), JSON.stringify({ prompt: rawPrompt, at: new Date().toISOString(), design: { ...lite, elements: els } }, null, 1));
+      } catch { /* ignore */ }
+    }
+    // 0. Simple commands the editor carries out itself (shape, alignment, ink) — answered at once
+    const instant = instantAnswer(rawPrompt, currentDesign, language);
+    if (instant) {
+      console.log('⚡ instant answer (no AI):', instant.summary, '←', JSON.stringify(rawPrompt.slice(0, 80)));
+      return instant;
+    }
 
     // 1. Try Antigravity-Level Agentic Gemini Engine First (for EVERYTHING: conversation, generation, and editing)
     if (geminiKey) {
@@ -49,6 +282,88 @@ export class AiStampService {
         console.log("💎 Gemini RAW Result:", geminiResult);
         
         if (geminiResult && geminiResult.reply) {
+          // A reply that must be in English letters (English, Manglish, Hinglish…) sometimes picks up a
+          // stray letter from another script ("kootي") — remove those
+          const replyRule = languageRule(language, rawPrompt).label;
+          if (replyRule === 'ENGLISH' || /MIXED WITH ENGLISH/.test(replyRule)) {
+            const stray = /[؀-ۿऀ-෿]/g;
+            // also plain letters for transliteration marks ("aakkiyiṭṭuṇḍu" → "aakkiyittundu")
+            const plain = (t: string) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').normalize('NFC');
+            geminiResult.reply = plain(geminiResult.reply).replace(stray, '').replace(/\s{2,}/g, ' ').trim();
+            if (typeof geminiResult.summary === 'string') geminiResult.summary = geminiResult.summary.replace(stray, '').trim();
+          }
+          // save / export requests: only real values get through
+          if (geminiResult.doSave !== true) delete geminiResult.doSave;
+          const fmt = String(geminiResult.doExport || '').toLowerCase();
+          if (fmt === 'pdf' || fmt === 'png' || fmt === 'svg') geminiResult.doExport = fmt;
+          else delete geminiResult.doExport;
+          if (typeof geminiResult.laserInvert !== 'boolean') delete geminiResult.laserInvert;
+          if (typeof geminiResult.laserMirror !== 'boolean') delete geminiResult.laserMirror;
+          // real stamp sizes only (a round stamp is as tall as it is wide)
+          sanitizeStampSize(geminiResult);
+          if ((geminiResult as any).design && typeof (geminiResult as any).design === 'object') sanitizeStampSize((geminiResult as any).design);
+          // "Make it round" on an existing design is a SHAPE CHANGE, never a new stamp: the model
+          // sometimes answers it with GENERATE_NEW, which threw the user's design away. The editor
+          // converts the design itself (borders, inner rings, text) — the server only passes the shape.
+          const hasDesign = !!(currentDesign && Array.isArray(currentDesign.elements) && currentDesign.elements.length);
+          const target = hasDesign ? detectShapeChange(rawPrompt, geminiResult.understood) : null;
+          // "correct the alignment" / "align properly" / "layout shariyaakku": the editor re-aligns
+          // the whole layout with its own rules (frames, top & bottom lines, centre) — no new design
+          // Only a request about the WHOLE layout — never a message that just contains "centre" or the
+          // Manglish "shari / sheri" (= ok / correct), and never when the AI already made a real edit
+          // ("logo centre-il vekku", "sheri, name maattu" must keep the AI's changes)
+          const aiEdit = geminiResult.changes && ['update', 'add', 'remove'].some((k) => Array.isArray((geminiResult.changes as any)[k]) && (geminiResult.changes as any)[k].length);
+          // the alignment request is recognised from the message OR from how the AI understood it
+          // (it decodes typos and Manglish), unless it is about one side ("logo left-il")
+          const asksAlign = ALIGN_WORDS.test(rawPrompt) || (typeof geminiResult.understood === 'string' && /\b(?:align\w*|layout|arrange\w*)\b/i.test(geminiResult.understood));
+          if (hasDesign && !target && !aiEdit && geminiResult.action !== 'GENERATE_NEW' && asksAlign &&
+              !/\b(?:left|right|edath\w*|valath\w*)\b/i.test(rawPrompt)) {
+            geminiResult.reply = /[a-z]/i.test(geminiResult.reply || '') && /aakk|akk|cheyy|venam|shari|sheri/i.test(rawPrompt)
+              ? 'Done! Alignment shariyaakki.'
+              : 'Done! The layout is re-aligned.';
+            geminiResult.summary = 'Layout re-aligned';
+            geminiResult.action = 'SURGICAL_EDIT';
+            (geminiResult as any).doRealign = true;
+            delete (geminiResult as any).design;
+            delete (geminiResult as any).designBrief;
+            delete (geminiResult as any).elements;
+            delete geminiResult.changes;
+            delete geminiResult.inkColor;
+            delete geminiResult.shape;
+            delete geminiResult.widthMm;
+            delete geminiResult.heightMm;
+          }
+          if (target) {
+            geminiResult.action = 'SURGICAL_EDIT';
+            geminiResult.shape = target;
+            delete (geminiResult as any).design;
+            delete (geminiResult as any).designBrief;
+            delete (geminiResult as any).elements;
+            // only the shape was asked for: the ink stays unless a colour was named too
+            if (!/\b(?:ink|colou?r|red|blue|black|green|violet|purple|brown|orange|pink|navy|neela|chuvapp\w*|karupp\w*|pacha)\b/i.test(rawPrompt)) {
+              delete geminiResult.inkColor;
+            }
+            // keep a size only when the user actually gave one
+            if (!/\d\s*(?:mm|x|×)/i.test(rawPrompt)) {
+              delete geminiResult.widthMm;
+              delete geminiResult.heightMm;
+            }
+            if (geminiResult.changes && typeof geminiResult.changes === 'object') {
+              // the shape change itself needs no element edits; keep only edits that were asked for too
+              delete (geminiResult.changes as any).remove;
+              delete (geminiResult.changes as any).add;
+            }
+          }
+          // Edits come back as a small "changes" patch (much faster than the model re-writing the
+          // whole design) — apply it to the current design so the editor still gets the full list
+          // (an ink / size-only edit has no patch: it still returns the current elements, so the
+          // editor applies the new ink colour along with them)
+          const isEdit = geminiResult.action === 'SURGICAL_EDIT' || (geminiResult.changes && geminiResult.action !== 'GENERATE_NEW');
+          if (isEdit && hasExistingElements && !Array.isArray(geminiResult.elements)) {
+            geminiResult.elements = applyDesignChanges(currentDesign.elements, geminiResult.changes || {});
+            geminiResult.action = 'SURGICAL_EDIT';
+          }
+          delete geminiResult.changes;
           // Repair / validate what the model returned so the editor always gets drawable elements
           const rawCount = Array.isArray(geminiResult.elements) ? geminiResult.elements.length : 0;
           if (Array.isArray(geminiResult.elements)) {
@@ -67,30 +382,108 @@ export class AiStampService {
           }
           const hasWeirdElements = rawCount > 0 && Array.isArray(geminiResult.elements) && geminiResult.elements.length === 0;
 
+          // New design → the category layout engine builds it exactly. The AI's "design" spec is
+          // used; if it forgot it, the spec is read from its one-line brief instead.
+          if (geminiResult.action === 'GENERATE_NEW') {
+            let spec: any = (geminiResult as any).design;
+            // behaviour rule 1: no words on the stamp that the user never gave (e.g. "MAIN BRANCH")
+            if (spec && typeof spec === 'object') {
+              const said = [rawPrompt, ...(Array.isArray(history) ? history.filter((h) => h.role === 'user').map((h) => h.text || '') : [])].join(' ');
+              const dropped = dropInventedTexts(spec, said);
+              if (dropped.length) console.log('🧹 dropped invented text:', dropped.join(' | '));
+            }
+            let built = spec ? buildCategoryDesign(spec) : null;
+            if (!built) {
+              spec = specFromBrief(String((geminiResult as any).designBrief || ''), rawPrompt);
+              built = spec ? buildCategoryDesign(spec) : null;
+              if (built) console.log('🏷️ layout from brief (no design spec from the AI)');
+            }
+            if (built && spec && geminiResult.shape && !spec.shape) spec.shape = geminiResult.shape;
+            if (built) {
+              // logo stamp: keep the logo already uploaded and centre it in the new seal
+              const isLogoStamp = String(spec.category).toLowerCase() === 'logo';
+              if (isLogoStamp) placeExistingLogo(built, currentDesign);
+              // 2 professional alternatives with the same texts — only ones that pass the print check
+              const variations = buildVariations(spec)
+                .map((v) => {
+                  if (isLogoStamp) placeExistingLogo(v, currentDesign);
+                  const checked = withPrintCheck<BuiltDesign & { printWarnings?: string[] }>({ ...v, elements: normalizeElements(v.elements, { widthMm: v.widthMm, heightMm: v.heightMm }) });
+                  const inkColor = (spec.inkColor && /^#[0-9a-f]{3,8}$/i.test(spec.inkColor) ? spec.inkColor : null) || v.inkColor;
+                  return printCheck(checked.elements!, v.widthMm, v.heightMm, v.shape).length ? null : { label: v.label, shape: v.shape, widthMm: v.widthMm, heightMm: v.heightMm, inkColor, elements: checked.elements! };
+                })
+                .filter((v): v is NonNullable<typeof v> => !!v);
+              const out: AiStampGeneratedPayload = {
+                action: 'GENERATE_NEW',
+                title: geminiResult.title,
+                shape: built.shape,
+                widthMm: built.widthMm,
+                heightMm: built.heightMm,
+                inkColor: (spec.inkColor && /^#[0-9a-f]{3,8}$/i.test(spec.inkColor) ? spec.inkColor : null) || built.inkColor,
+                reply: geminiResult.reply,
+                summary: geminiResult.summary,
+                suggestedFollowUps: geminiResult.suggestedFollowUps,
+                understood: geminiResult.understood,
+                doSave: geminiResult.doSave,
+                doExport: geminiResult.doExport,
+                laserInvert: geminiResult.laserInvert,
+                laserMirror: geminiResult.laserMirror,
+                elements: normalizeElements(built.elements, { widthMm: built.widthMm, heightMm: built.heightMm }),
+                variations: variations.length ? variations : undefined,
+              };
+              console.log('🏷️ category layout:', spec.category, `${built.widthMm}×${built.heightMm}`, `+${variations.length} variations`);
+              return withPrintCheck(out);
+            }
+          }
+
           // Force handover to Neural Engine if it's a completely new design or hallucinated element types
           if (geminiResult.action === 'GENERATE_NEW' || (!hasExistingElements && geminiResult.elements && geminiResult.elements.length > 0) || hasWeirdElements) {
             console.log("💎 Gemini triggered GENERATE_NEW or hallucinated geometry, handing over to Neural CAD Engine...");
             // Run neural engine to generate perfect geometry based on Gemini's derived shape & properties
+            // Build from the AI's clean brief (it gathers the texts from the whole conversation and
+            // drops chat words) — the raw message alone may be just "seri, undakku" or miss details
+            const brief =
+              typeof (geminiResult as any).designBrief === 'string' && (geminiResult as any).designBrief.trim().length > 3
+                ? (geminiResult as any).designBrief.trim()
+                : rawPrompt;
+            console.log('🧾 design brief:', brief);
             const neuralFallback = this.heuristicSemanticGenerator(
-              rawPrompt,
-              rawPrompt.toLowerCase(),
-              language,
+              brief,
+              brief.toLowerCase(),
+              offline,
               geminiResult.shape,
               geminiResult.inkColor,
               geminiResult.widthMm,
               geminiResult.heightMm
             );
+            // The engine keeps the brief's label ("doctor :", "COMPANY :") on the first line —
+            // strip it, so only the real texts end up on the stamp
+            const colon = brief.indexOf(':');
+            if (colon > 0 && Array.isArray(neuralFallback.elements)) {
+              const labelWords = new Set(brief.slice(0, colon).toLowerCase().split(/[^a-z]+/).filter(Boolean));
+              for (const el of neuralFallback.elements) {
+                if (typeof el?.text !== 'string') continue;
+                el.text = el.text.replace(/^\s*([A-Za-z][A-Za-z\s]*?)\s*(?::|-|–|for)\s+/, (whole: string, words: string) =>
+                  words.toLowerCase().split(/\s+/).every((w: string) => labelWords.has(w)) ? '' : whole
+                );
+              }
+              neuralFallback.elements = neuralFallback.elements.filter((el: any) => typeof el?.text !== 'string' || el.text.trim());
+            }
             // Inject Gemini's reply, title, inkColor, and shape choices into the neural output
             neuralFallback.reply = geminiResult.reply;
+            if (typeof geminiResult.understood === 'string') neuralFallback.understood = geminiResult.understood;
+            if (geminiResult.doSave) neuralFallback.doSave = true;
+            if (geminiResult.doExport) neuralFallback.doExport = geminiResult.doExport;
             if (geminiResult.title) neuralFallback.title = geminiResult.title;
             if (geminiResult.shape) neuralFallback.shape = geminiResult.shape;
             if (geminiResult.inkColor) neuralFallback.inkColor = geminiResult.inkColor;
             if (geminiResult.widthMm) neuralFallback.widthMm = geminiResult.widthMm;
             if (geminiResult.heightMm) neuralFallback.heightMm = geminiResult.heightMm;
-            return neuralFallback;
+            if (typeof geminiResult.laserInvert === 'boolean') neuralFallback.laserInvert = geminiResult.laserInvert;
+            if (typeof geminiResult.laserMirror === 'boolean') neuralFallback.laserMirror = geminiResult.laserMirror;
+            return withPrintCheck(neuralFallback); // a new design: all of its problems
           }
-          
-          return geminiResult; // Return Gemini's dynamic response (which contains elements and intelligent reply)
+
+          return withPrintCheck(geminiResult, currentDesign); // Return Gemini's dynamic response (which contains elements and intelligent reply)
         }
       } catch (err) {
         console.warn('Gemini Unified API fallback to Neural Engine:', err);
@@ -99,16 +492,32 @@ export class AiStampService {
 
     // 2. FALLBACK: If Gemini API fails (or Rate Limit hit), fallback to Regex heuristics
     if (this.isConversationalPrompt(rawPrompt)) {
-      return this.handleConversationalReply(rawPrompt, currentDesign, language);
+      // The AI is set up but didn't answer (Google busy / limit): the canned answers don't fit the
+      // question, so say simply that the AI is busy. Canned answers are only for setups with no AI.
+      if (geminiKey) {
+        const manglish = offline === 'MANGLISH';
+        const quota = this.lastAiFailure === 'quota';
+        return {
+          action: 'CONVERSATION',
+          reply: manglish
+            ? quota
+              ? 'Sorry, AI limit ippol theernnu. Oru minute kazhinju chodikkamo?'
+              : 'Sorry, AI ippol busy aanu. Onnu koodi chodikkamo?'
+            : quota
+            ? 'Sorry, the AI limit is reached for now. Please ask again in a minute.'
+            : 'Sorry, the AI is busy right now. Please ask again.',
+          summary: 'AI busy',
+          suggestedFollowUps: [],
+        };
+      }
+      return this.handleConversationalReply(rawPrompt, currentDesign, offline);
     }
 
     // Editing an existing design needs the real AI: the offline rules guessed wrong (removed the
     // wrong border, pasted the whole sentence as text). Never touch the design without it —
     // say clearly why, in the user's language, and leave everything as it is.
     if (currentDesign && currentDesign.elements && currentDesign.elements.length > 0) {
-      const manglish =
-        language === 'MANGLISH' ||
-        (language !== 'ENGLISH' && /\b(?:aaku|aakku|maattu|maatti|cheyyu|venam|aakki|ith|ini|onnu|koodi|kurachu|aanu|enth)/i.test(rawPrompt));
+      const manglish = offline === 'MANGLISH';
       const quota = this.lastAiFailure === 'quota';
       return {
         action: 'CONVERSATION',
@@ -123,7 +532,50 @@ export class AiStampService {
         suggestedFollowUps: [],
       };
     }
-    return this.heuristicSemanticGenerator(rawPrompt, rawPrompt.toLowerCase(), language);
+    // Office stamps (PAID / RECEIVED / APPROVED…) are recognised and built properly even without the AI
+    const officeSpec = offlineSpec(rawPrompt);
+    const officeBuilt = officeSpec ? buildCategoryDesign(officeSpec) : null;
+    if (officeBuilt) {
+      const manglish = offline === 'MANGLISH';
+      return withPrintCheck<AiStampGeneratedPayload>({
+        action: 'GENERATE_NEW',
+        title: `${officeSpec!.statusWord} stamp`,
+        shape: officeBuilt.shape,
+        widthMm: officeBuilt.widthMm,
+        heightMm: officeBuilt.heightMm,
+        inkColor: officeBuilt.inkColor,
+        reply: manglish ? `${officeSpec!.statusWord} stamp ready aakkittund!` : `Done! Here is your ${officeSpec!.statusWord} stamp.`,
+        summary: `${officeSpec!.statusWord} office stamp`,
+        suggestedFollowUps: [],
+        elements: normalizeElements(officeBuilt.elements, { widthMm: officeBuilt.widthMm, heightMm: officeBuilt.heightMm }),
+      });
+    }
+    // AI not available for a new stamp: read the stamp type and its texts from the message itself
+    // ("oval seal for KERALA BANK LTD, TRIVANDRUM" / "doctor stamp: DR. ANU, MBBS, REG 45213") and
+    // build it with the same layout engine as an AI design — properly aligned, only the user's words
+    {
+      const p = rawPrompt.replace(/\s+/g, ' ').trim();
+      const m = p.match(/^(.*?\b(?:seal|stamp)\b[^,:]*?)(?:\s*:\s*|\s+for\s+)(.+)$/i);
+      const brief = m ? `${m[1]}: ${m[2]}` : '';
+      const spec = brief ? specFromBrief(brief, p) : null;
+      const built = spec ? buildCategoryDesign(spec) : null;
+      if (built) {
+        const manglish = offline === 'MANGLISH';
+        return withPrintCheck<AiStampGeneratedPayload>({
+          action: 'GENERATE_NEW',
+          title: (spec!.topText || (spec!.lines || [])[0] || 'Stamp').slice(0, 40),
+          shape: built.shape,
+          widthMm: built.widthMm,
+          heightMm: built.heightMm,
+          inkColor: built.inkColor,
+          reply: manglish ? 'Stamp ready aakkittund! Ishtamullath maattaan parayoo.' : 'Here is your stamp. Tell me anything you would like to change.',
+          summary: 'New stamp',
+          suggestedFollowUps: [],
+          elements: normalizeElements(built.elements, { widthMm: built.widthMm, heightMm: built.heightMm }),
+        });
+      }
+    }
+    return this.heuristicSemanticGenerator(rawPrompt, rawPrompt.toLowerCase(), offline);
   }
 
   /**
@@ -300,193 +752,246 @@ export class AiStampService {
 
     const hasExistingElements = currentDesign && Array.isArray(currentDesign.elements) && currentDesign.elements.length > 0;
 
-    const systemInstruction = `You are Clixio AI — the ultimate advanced conversational CAD AI agent for vector rubber stamps.
-    
-    1. Respond exclusively in valid JSON format. Do not use Markdown backticks.
-    2. Act as a highly intelligent, empathetic human expert rubber stamp designer named Clixio. 
+    const systemInstruction = `You are Clixio AI, an expert commercial rubber-stamp designer (seals, self-inking / pre-inked, office, signature, address, logo stamps). Turn the user's instructions into accurate, balanced, print-ready stamp designs. Reply ONLY with valid JSON (no markdown). Talk like a friendly specialist to a shop owner: short, plain, practical.
 
-CRITICAL CONVERSATIONAL & PERSONA RULES:
-1. STRICT MULTILINGUAL & LANGUAGE MIRRORING RULE:
-   - You MUST detect the language/style of the user's prompt and reply in that EXACT SAME LANGUAGE:
-     * If the user asks in ENGLISH (e.g. "Create a round notary seal for John", "Make border thicker", "What shape is best?"): You MUST reply in fluent, professional, friendly ENGLISH.
-     * If the user asks in MANGLISH (Malayalam written in Latin script, e.g. "Doctor stamp set aakku", "Oru school seal venam", "Border katti kootto"): You MUST reply in natural, fluent, friendly MANGLISH (using friendly words like "set aakkam", "adipoli", "super aayittund").
-     * If the user asks in MALAYALAM SCRIPT (e.g. "ഒരു ഡോക്ടർ സീൽ വേണം"): Reply in MALAYALAM SCRIPT.
-     * If the user asks in HINDI or any other language: Reply in that EXACT LANGUAGE.
-   - NEVER force Manglish if the user is asking in English, and NEVER force English if the user is asking in Manglish!
-2. Act as a highly intelligent, empathetic human expert rubber stamp designer named Clixio. 
-3. ADVANCED INTELLIGENCE & REASONING: 
-   - Deeply analyze vague or simple user prompts. (e.g., if the user just says "school", don't just make a blank stamp. Reason that a school needs a Principal seal, Office seal, or Admission seal. Suggest these options!)
-   - Anticipate the user's unstated needs. If they ask for a "company stamp", remind them that they might need their Registration Number (CIN/GST) or Logo on it.
-4. If the user asks a question, seeks advice (e.g. "which stamp shape is best for an agency" or "oru agencykk enth type stamp anu nallath"), or provides feedback, provide a detailed, intelligent consultation in the user's language in the "reply" field. DO NOT create a random stamp or overwrite the canvas if they are just asking for advice! Treat existing elements as IMMUTABLE GROUND TRUTH in this case.
+NON-NEGOTIABLE RULES (override everything below):
+1. No decoration the user didn't ask for (stars, icons, dashed rings, filler words like "ESTD.", "OFFICIAL SEAL"). Only what a category needs (double border on a seal, separator stars between top and bottom text). Never invent texts.
+2. Readability over decoration: when space is short drop decoration first, then shorten / shrink text.
+3. Never distort an uploaded logo: same factor for width and height, keep its centre; never stretch, crop or redraw.
+4. Real stamp sizes: round 25–50 mm (width = height), rectangular ~38×14 to 80×45, oval ~40×25 to 60×40. Change the stamp size only when asked.
+5. Text must fit its place (smaller, condensed font, or split a long line); nothing touches a border or leaves the stamp.
+6. Texts for the stamp missing (company / person name, address, reg. no.)? Do NOT use placeholders: action "CONVERSATION", ask for what is missing in one short message (max 3 items). Style details (font, border, layout, size) you decide yourself.
+7. Use the category's professional layout; "suggestedFollowUps" = category-appropriate next steps (seal → "Add GST number", address stamp → "Add phone number").
+8. For every new design ALWAYS return the "design" spec (the server builds alternative styles from it).
+9. Lines ≥ 0.3 mm (0.5+ preferred), text ≥ 2 mm (≥ 3 mm for negative text). If asked for less, use the minimum and say so briefly.
+10. Check it as a real stamp: one ink colour, no gradients, gaps ≥ 0.5 mm (text ↔ border ≥ 1 mm), nothing outside, readable at real size. If it can't be made well, say so in one line with the fix.
 
-CRITICAL SURGICAL EDITING PRINCIPLES:
-1. IMMUTABLE GROUND TRUTH:
-   - When the canvas is NOT empty (Current Canvas Snapshot has elements):
-   - You MUST treat all existing elements as IMMUTABLE GROUND TRUTH unless explicitly asked to change them.
-   - DO NOT re-generate, re-invent, delete, or randomize any element that the user did not ask to change.
-   - Output EVERY existing element back in the "elements" array with its EXACT existing 'id', 'type', coordinates, font sizes, and texts, ONLY altering the single specific property or element the user requested!
+USER'S EXACT WORDS FIRST: texts (word for word, only obvious misspellings of ordinary words fixed), sizes, shape, ink, fonts, positions, what to add / remove — do exactly that, even against your own taste. Your expertise only fills what they didn't say. Change ONLY what was asked. Exception: print minimums (rule 9 / 5).
 
-2. SURGICAL ACTION EXAMPLES:
-   - "change official to rashad" -> Find the element with "OFFICIAL", change text to "RASHAD". Keep ALL other elements 100% untouched.
-   - "make ink red" -> Update inkColor to "#990000". Keep ALL elements 100% untouched.
-   - "add two stars" -> Keep all existing elements intact and APPEND two 5-point star clipart elements on left and right.
-   - "make border thicker" -> Increase strokeWidth on the existing border element only.
+UNDERSTAND IMPERFECT MESSAGES (typos, short forms, voice typing, Manglish mixed with English) — work out the meaning, never ask to rephrase when it's reasonably clear: "boder thikr aakku" = border thicker, "ovel shap" = oval, "colr red" = ink red, "txt bigr" = text bigger, "adress" = address. On-stamp text: fix clear misspellings of ordinary words (HOSPTAL → HOSPITAL, LIMTED → LIMITED, GOVERMENT → GOVERNMENT) and mention it; NEVER change names, brands, numbers or codes. Always return "understood": the request as one short correct English sentence.
 
-3. NEW STAMP CREATION (GENERATE_NEW):
-   - If the canvas is empty OR if the user explicitly says "create a new stamp", "make a hospital stamp", "need ovel shape for hospital" or provides a completely new business description, you MUST set "action" to "GENERATE_NEW". 
-   - When action is "GENERATE_NEW", you DO NOT need to output the "elements" array. The backend CAD Neural Engine will perfectly generate the geometric elements based on the prompt! Provide your response in the EXACT language used by the user.
+FOLLOW THE CONVERSATION: the new message is usually a follow-up. "it / that / this / same / again / more / athu / ithu / onnu koodi / kurachu koode" = what was just discussed or changed (after a top-text change, "make it bigger" = that text's size, NOT the stamp size). After you gave advice or options, "ok / yes / do it / seri / cheyyu / athu mathi / the first one" = do it now with the details given earlier. Combine details given over several messages. "Undo / go back / pazhaya pole" = reverse your last change. Change widthMm / heightMm only when the user talks about the stamp size.
 
-4. VIEW CONTEXT AND A4 SHEET SETTINGS (UPDATE_A4_SETTINGS & ADD_A4_COPIES):
-   - You will receive a "viewMode" property which can be "SINGLE" or "A4_SHEET".
-   - If viewMode is "A4_SHEET", the user is currently looking at the A4 production page.
-   - If the user asks to change A4 settings (e.g., "turn on laser invert", "mirror flip the sheet", "crop marks on aakku", "cut outlines off cheyyu"):
-     - You MUST set "action" to "UPDATE_A4_SETTINGS".
-     - Return the updated settings in an "a4Config" object inside the JSON root. (Use the existing a4Config provided to you as a base, toggle the boolean fields requested).
-     - DO NOT output the "elements" array for this action.
-   - If the user asks to add multiple copies of the stamp to the A4 sheet (e.g., "a4 il 10 copies arrange cheyyu", "add 5 stamps", "auto pack 20 copies"):
-     - You MUST set "action" to "ADD_A4_COPIES".
-     - Provide the number of copies requested in a "copies" integer field.
-     - DO NOT output the "elements" array for this action.
-   - However, if the user asks to change the *stamp design itself* while in A4 view (e.g., "change name to RASHAD"), treat it as a SURGICAL_EDIT normally.
+SPECIALIST KNOWLEDGE:
+- What each stamp needs: company seal → registered name on top curve, city / state on bottom curve, optional GST / CIN / reg. no. or logo in the centre; doctor → name, qualification (MBBS, MD), reg. no.; notary → name, "NOTARY", commission details; school / institution → name, place, post (Principal, Office); address → name, address, PIN, phone; signatory → "For <COMPANY>", blank signing space, "Authorised Signatory". Point out important missing details.
+- Categories: COMPANY SEAL round 38–45 mm (40 usual) or oval for banks / premium, double border, stars between top and bottom text, blue / violet ink. BUSINESS (rectangular): name (biggest, bold), address with PIN, phone, email, GST, website; max ~6 lines ≥ 2 mm, thin border. SIGNATURE: signatory block (no heavy border) or an uploaded signature cleaned as a logo (simplify 1, smooth 2, thickness +1 if thin; never redraw it). LOGO STAMP: uploaded logo large in the centre (35–45% of inner circle), name on top curve; no logo on canvas → design the seal and ask them to upload it (Logo button). OFFICE (APPROVED, PAID, RECEIVED, URGENT, CONFIDENTIAL, COPY…): rectangular, bold double border, big heavy condensed word, optional DATE / SIGN lines; ink by meaning: PAID / REJECTED / URGENT / CONFIDENTIAL red, APPROVED / VERIFIED green, RECEIVED / DISPATCHED / ENTERED blue (unless a colour is named).
+- Stamp types: traditional rubber (cheapest, any size, low use), self-inking (Trodat / Colop; best for daily office use), pre-inked / flash (sharpest, premium seals and logos). Shapes: round = seals; square = logos / QR / monograms 20–40 mm; rectangular = address / signature / office / doctor, ~47×18–58×22; oval = premium / bank / director, ~50×30–55×35. Which to buy: daily office → self-inking; sharp premium → pre-inked; cheapest / large → rubber.
+- Vague request: decide the STYLE yourself like an expert, say briefly what you chose, give 2–3 follow-ups. Missing TEXTS → ask (rule 6). Just "school" → suggest Principal / Office / Admission seal and ask for name and place.
+- Ink: blue / violet official, black general, red for status words.
+- One ink only, artwork is black & white (photos only as "dots"). Negative = solid ink with blank letters (short text, letters ≥ 3 mm): "negative / white text on black" → "laserInvert": true, "normal / positive" → false. Keep small holes (A, B, O, R, logo gaps) open. Small stamps (≤ 30 mm): fewer words, simpler logos.
+- Mirror: only when the user engraves the rubber on their OWN laser → "laserMirror": true. Files for a stamp shop, proofs, PDFs → false ("mirror before sending to the shop?" → NO). Set laserInvert / laserMirror only when asked.
+
+LAYOUT (W, H = stamp size, centre = W/2, H/2):
+- Rings, curved text and seal parts centred exactly; middle text x = W/2, align "center". Off-centre only if asked.
+- Pairs (stars) mirrored: same height, same distance from the centre. Top and bottom curved text: same radius, same size.
+- Round seals: outer border radius ≈ min(W,H)/2 − 0.8; text 1–1.2 mm inside the neighbouring ring; equal gaps outer ring → text → inner ring. Rectangular: ≥ 1.5 mm from the border.
+- Round seal: name top curve, place bottom curve, 1–3 short middle lines (2 lines at H/2 ± gap/2, 3 at H/2 − gap, H/2, H/2 + gap). Rectangular: lines stacked and vertically centred, name on top, spacing ≈ 1.3 × text size.
+- Borders: outer 0.8–1.2 mm, inner 0.4–0.6, gap 0.8–1.5; dashed / dotted only as decoration.
+- Logo: round → centre, 35–45% of the inner circle, existing middle text moved just below it (never deleted); rectangular → left square area with text to the right (or centred on top). Never over text or a border.
+- After any edit keep the balance: new parts in symmetric spots, re-centre what's left after a removal.
+
+TYPOGRAPHY (only these fontFamily values):
+- Companies: "Montserrat, Arial, sans-serif" (default), "'Plus Jakarta Sans', Montserrat, sans-serif", "'Poppins', sans-serif". Official / legal / notary: "'Cinzel', Georgia, serif", "'Playfair Display', Georgia, serif". Condensed (long names, narrow stamps): "'Oswald', Arial, sans-serif", "'Barlow Condensed', sans-serif", "'Bebas Neue', Impact, sans-serif" (capitals). Script (short name / title only): "'Great Vibes', cursive". Malayalam: "'Noto Sans Malayalam', sans-serif", "'Manjari', sans-serif", "'Baloo Chettan 2', sans-serif"; Hindi "'Noto Sans Devanagari', sans-serif"; Tamil "'Noto Sans Tamil', sans-serif".
+- Hierarchy: name biggest + bold; second line ~75% normal; details ~60%. Max 2 families. Text under 3 mm: clean sans only. A "font style" change applies to names / headings; detail lines (GST, phone, reg. no.) stay clean sans.
+- Letter spacing: curved capitals 0.2–0.6, long names 0–0.15, straight 0–0.2, never negative. Curved text: top isReversed false, bottom true; leave a gap or star where they meet; too long → smaller or condensed, never squeezed.
+- Malayalam text MUST use a Malayalam font, ~10–15% larger than English, letterSpacing 0–0.1.
+
+LOGOS (uploaded logos are "image" elements; the editor re-traces them from your settings):
+- "stamp-friendly / simple / clean / remove small details" → "simplify": 2 (3 very busy), "smooth": 1. "Lines too thin / faint / bolder" → "thickness": +1 (max +2). "Too heavy / blobby" → "thickness": -1 or "simplify": 1 + lower "threshold". "More / less should print, too light / dark" → "threshold" ± 20–30. Photo-like / shaded → "style": "dots" or "outline"; white logo on dark → "invert": true.
+- "Remove the background / background venda", logo on a coloured box or photographed on paper → "removeBg": true; "keep the background" → false.
+- Under ~8 mm wide fine details vanish: suggest bigger or more simplify. You can't redraw or replace the picture; a new logo is uploaded with the Logo button.
+
+SAVE / EXPORT (only when really asked): "save / save cheyyu / store it" → "doSave": true. "export / download / pdf / png / svg / file venam / print file" → "doExport" = the format named ("print" → "pdf"; none named → "svg" for laser, else "pdf"). Works with any action ("make ink red and save" = the edit AND doSave; "export as png" alone = CONVERSATION + doExport). One short reply line.
+
+LANGUAGE: reply in the user's exact language and style — English → English; Manglish (Malayalam in Latin letters) → natural friendly Manglish ("set aakkam", "adipoli"); Malayalam script → Malayalam script; Hindi / Tamil / Telugu / Kannada / Bengali or their English-mixed forms → that language and style. The [LANGUAGE REQUIREMENT] line is binding. Never force Manglish on English or English on Manglish.
+
+REPLY STYLE: after an edit / new design ONE short sentence (~15 words) saying what changed ("Done! The border is thicker now." / "Done! Ink red aakki."). Plain words: "border", "top text", "bottom text", "middle text", "text size" — never "stroke width", "arc text", "vector", "element", "radius", "surgical". No praise or filler, no explanations unless asked. Questions / advice: answer first, max 3 short lines (~40 words), and never change the canvas for a question. "summary" max 6 words; "suggestedFollowUps" 2–3 items of 2–4 simple words.
+
+EDITING (canvas NOT empty) — existing elements are ground truth:
+- Never re-generate, delete or randomize what wasn't asked. Return ONLY a "changes" patch (the server applies it; omit empty lists):
+  "changes": { "update": [ { "id": "<existing id>", ...only changed props } ], "add": [ { full new element, new id } ], "remove": [ "<id>" ] }
+- Examples: "change official to rashad" → update that text's "text": "RASHAD". "make ink red" → root "inkColor": "#990000", no changes. "add two stars" → add two star clipart, left and right. "make border thicker" → update the outer ring "strokeWidth": 1.2. "remove the stars" → remove their ids.
+- SHAPE CHANGE ("make it round", "square aakku", "oval shape venam", "change to rectangle") → action "SURGICAL_EDIT", root "shape": "ROUND" | "OVAL" | "SQUARE" | "RECTANGULAR", widthMm / heightMm only if a size was given, NO changes — the editor converts the whole design. Never GENERATE_NEW for a shape change.
+- "make the stamp 45 mm" → root "widthMm": 45, "heightMm": 45 (round / square), no changes — the editor rescales.
+- Match referenced text case-insensitively ("kerala" = "KERALA"); keep UPPERCASE style. "top text" = arc-text isReversed false, "bottom text" = isReversed true, "middle text" = type "text"; "outer border" = largest ring, "inner ring" = smaller. Use exact ids. Only claim changes you actually made; unclear → ask (CONVERSATION). CONVERSATION carries neither elements nor changes.
+
+NEW STAMP (canvas empty, or the user clearly asks for a new / different stamp or business) → "GENERATE_NEW". Don't output elements. Return:
+- "design": { "category": "company_seal" | "business" | "signature" | "office" | "logo" | "other", "shape": "ROUND" | "OVAL" | "RECTANGULAR", "widthMm" / "heightMm" (only if given), "inkColor" (only if asked); seals / logo: "topText", "bottomText", "centerLines" (max 3); business: "lines" [name, address, phone, email, GST, website]; signature: "forText", "designation"; office: "statusWord", "withDate", "withSignature", "extraLine"; and your style decisions: "fontStyle": "modern" (companies, shops) | "classic" (government, legal, notary, schools, temples) | "condensed" (very long names), "border": "double" (seals) | "single" (business, address, signature) | "dotted" | "serrated" (notary, official, vintage) | "none", "decoration": "stars" (seals) | "none". A font / border / style the user named wins. Exact texts only, no chat words.
+- "designBrief": one clean English line with the stamp type and ALL exact texts from this and earlier messages, e.g. "Round company seal: SUNRISE BAKERY, KOCHI, GST 32ABCDE1234F1Z5".
+- Category from the request: "GST, address, phone stamp" → business; "PAID stamp" → office; "company / common seal" → company_seal; "sign stamp for my company" → signature.
+
+A4 SHEET (viewMode "A4_SHEET"): A4 settings ("laser invert on", "mirror the sheet", "crop marks on aakku", "cut lines off") → action "UPDATE_A4_SETTINGS" with the full "a4Config" (current one with the requested booleans toggled). "10 copies", "add 5 stamps", "auto pack 20" → "ADD_A4_COPIES" with "copies". No elements for either. Design changes in A4 view are normal edits.
 
 ${ELEMENT_SCHEMA}
 
-ACCURACY RULES:
-- For SURGICAL_EDIT, return the COMPLETE element list: every untouched element copied exactly, plus the requested change. Never drop elements unless asked to remove them.
-- Match text the user refers to case-insensitively (e.g. "kerala" means the element whose text is "KERALA"). Keep the original letter case style (stamps usually use UPPERCASE).
-- "top text" = arc-text with isReversed false; "bottom text" = arc-text with isReversed true; "center/middle text" = type "text".
-- "outer border" = the ring with the largest radius; "inner ring" = the smaller one.
-- Only say a change was made if you actually made it in "elements". If the request is unclear, ask a short question (action CONVERSATION) instead of guessing.
-- For CONVERSATION, do not output "elements".
-
-OUTPUT FORMAT: Strict valid JSON only without markdown or backticks.
+OUTPUT (strict JSON, include only the fields that apply):
 {
   "action": "CONVERSATION" | "SURGICAL_EDIT" | "GENERATE_NEW" | "UPDATE_A4_SETTINGS" | "ADD_A4_COPIES",
-  "a4Config": { "laserInvert": boolean, "laserMirror": boolean, "showCropMarks": boolean, "showCutLines": boolean },
-  "copies": number,
-  "title": "Stamp Title",
-  "shape": "ROUND" | "RECTANGULAR" | "OVAL" | "SQUARE",
-  "widthMm": number,
-  "heightMm": number,
-  "inkColor": string,
-  "reply": "Your intelligent response in the EXACT language of the user's prompt (English if user wrote English, Manglish if user wrote Manglish) as Clixio AI",
-  "summary": "Concise explanation of exact surgical changes made",
-  "suggestedFollowUps": ["Suggestion 1", "Suggestion 2", "Suggestion 3"],
-  "elements": [...] // Only provide this if action is SURGICAL_EDIT or CONVERSATION (preserve original)
+  "reply": "in the user's language",
+  "summary": "max 6 words",
+  "understood": "the request as one short correct English sentence",
+  "suggestedFollowUps": ["2–4 words", "..."],
+  "changes": { "update": [], "add": [], "remove": [] },
+  "title": "Stamp title", "shape": "...", "widthMm": 0, "heightMm": 0, "inkColor": "#hex",
+  "design": { ... }, "designBrief": "...",
+  "a4Config": { "laserInvert": false, "laserMirror": false, "showCropMarks": false, "showCutLines": false }, "copies": 0,
+  "doSave": true, "doExport": "pdf" | "png" | "svg", "laserInvert": true, "laserMirror": true
 }`;
 
     const formattedContents: any[] = [];
 
-    // Add previous multi-turn conversation memory if present
+    // Add previous multi-turn conversation memory if present — the new message is usually a
+    // follow-up to these turns (short texts, so 10 turns cost little time)
     if (Array.isArray(history) && history.length > 0) {
-      const recentHistory = history.slice(-6); // Keep last 6 turns for ultra-fast context
+      const recentHistory = history.slice(-6); // the last 3 exchanges carry the context; fewer tokens = faster reply
+      // an older client also sent the new message as the last history turn — don't send it twice
+      const last = recentHistory[recentHistory.length - 1];
+      if (last && last.role === 'user' && (last.text || '').trim() === prompt.trim()) recentHistory.pop();
       for (const msg of recentHistory) {
         if (!msg.text) continue;
         const cleanText = msg.text.replace(/kadeeja/gi, 'Clixio').replace(/euyra/gi, 'Clixio').replace(/inkora/gi, 'Clixio');
-        formattedContents.push({
-          role: msg.role === 'model' || msg.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: cleanText }],
-        });
+        const role = msg.role === 'model' || msg.role === 'assistant' ? 'model' : 'user';
+        const prev = formattedContents[formattedContents.length - 1];
+        // keep user / model turns alternating: merge two turns in a row from the same side
+        if (prev && prev.role === role) prev.parts[0].text += `\n${cleanText}`;
+        else formattedContents.push({ role, parts: [{ text: cleanText }] });
       }
+      // the conversation must start with the user
+      while (formattedContents.length && formattedContents[0].role === 'model') formattedContents.shift();
     }
 
-    let detectedLanguage = 'ENGLISH';
-    if (language === 'ENGLISH') {
-      detectedLanguage = 'ENGLISH';
-    } else if (language === 'MANGLISH') {
-      detectedLanguage = 'MANGLISH';
-    } else if (language === 'MALAYALAM') {
-      detectedLanguage = 'MALAYALAM';
-    } else {
-      const isMalayalamScript = /[\u0D00-\u0D7F]/.test(prompt);
-      const isHindiScript = /[\u0900-\u097F]/.test(prompt);
-      const isManglish = /\b(?:aaku|aakku|maattu|maatti|pakaram|cheyyu|nokk|venam|chuvapp|pacha|karupp|vattam|chathuram|katti|idumo|para|ini|ith|njan|ningal|enth|enthokke|nallath|kollam|adipoli|sugam|nanni|polichu|para|parayoo|paranja|venda|aano|ano|undo|machane)/i.test(prompt);
-      detectedLanguage = isMalayalamScript ? 'MALAYALAM' : isHindiScript ? 'HINDI' : isManglish ? 'MANGLISH' : 'ENGLISH';
+    // Which language to reply in: a chosen Indian language (script or English-mixed), English, or Auto Detect
+    const rule = languageRule(language, prompt);
+    const detectedLanguage = rule.label;
+    const languageInstruction = rule.instruction;
+
+    // the previous message got no answer (AI was busy): keep turns alternating
+    if (formattedContents.length && formattedContents[formattedContents.length - 1].role === 'user') {
+      formattedContents.push({ role: 'model', parts: [{ text: '(I could not answer that message — the AI was busy.)' }] });
     }
 
-    const languageInstruction = detectedLanguage === 'ENGLISH'
-      ? 'CRITICAL MANDATORY INSTRUCTION: You MUST reply in 100% PURE, PROFESSIONAL ENGLISH ONLY. DO NOT use ANY Malayalam or Manglish words (never use words like "machane", "njan", "adipoli", "set aakkam", "parayu").'
-      : detectedLanguage === 'MANGLISH'
-      ? 'CRITICAL MANDATORY INSTRUCTION: Reply in natural, friendly Manglish.'
-      : `CRITICAL MANDATORY INSTRUCTION: Reply in ${detectedLanguage}.`;
+    // What "it" / "that" / "athu" most likely means: the elements the AI changed last time, or the
+    // ones selected on the canvas (sent by the editor; not part of the design itself)
+    const { lastChangedIds, selectedIds, ...designOnly } = currentDesign || ({} as any);
+    const describe = (ids: any) =>
+      (Array.isArray(ids) ? ids : [])
+        .map((id: string) => (designOnly.elements || []).find((e: any) => e.id === id))
+        .filter(Boolean)
+        .map((e: any) => `${e.id} (${e.type === 'arc-text' ? (e.isReversed ? 'bottom text' : 'top text') : e.type === 'text' ? 'middle text' : e.type}${e.text ? ` "${e.text}"` : ''})`)
+        .join(', ');
+    // The model never needs the image data of a logo (a logo can be 100+ KB of text = very slow
+    // replies) — only where it is and its stamp settings. Vector logos drop their long path too.
+    // Compact snapshot (fewer tokens = faster reply): numbers to 2 decimals, default values left out
+    const compact = (e: any) => {
+      const out: any = {};
+      for (const [k, v] of Object.entries(e)) {
+        if (v === undefined || v === null || v === '') continue;
+        if ((k === 'visible' && v === true) || (k === 'locked' && v === false) || (k === 'strokeType' && v === 'solid')) continue;
+        if (k === 'angleOffset' && v === 0) continue;
+        out[k] = typeof v === 'number' ? Math.round(v * 100) / 100 : v;
+      }
+      return out;
+    };
+    const { projectTitle: _t, ...designFields } = designOnly as any;
+    const forModel = {
+      ...designFields,
+      elements: (designOnly.elements || []).map((e: any) => {
+        if (e?.type === 'image') {
+          const { src: _src, maskSrc: _mask, ...rest } = e;
+          return { ...compact(rest), note: 'uploaded logo — change position / size / stamp settings only' };
+        }
+        if (e?.type === 'clipart' && e.svgPath) {
+          const { svgPath: _p, viewBox: _v, ...rest } = e;
+          return { ...compact(rest), note: 'vector logo' };
+        }
+        return compact(e);
+      }),
+    };
+    const lastChanged = describe(lastChangedIds);
+    const selected = describe(selectedIds);
+    const focusLine =
+      lastChanged || selected
+        ? `\n[FOCUS for words like "it", "that", "this", "athu", "ithu": ${lastChanged ? `you last changed ${lastChanged}` : ''}${lastChanged && selected ? '; ' : ''}${selected ? `the user has selected ${selected}` : ''}. Apply follow-ups like "make it bigger / red / move it" to THESE elements, not to the whole stamp.]`
+        : '';
 
     // Add current user prompt with live canvas snapshot
     formattedContents.push({
       role: 'user',
       parts: [
         {
-          text: `[Active Canvas Snapshot: ${hasExistingElements ? JSON.stringify(currentDesign) : 'EMPTY'}]\n[Active View Mode: ${viewMode || 'SINGLE'}]\n[Active A4 Config: ${JSON.stringify(a4Config || {})}]\n[LANGUAGE REQUIREMENT: ${detectedLanguage}]\n${languageInstruction}\n\nUser Request: ${prompt}`,
+          text: `[Active Canvas Snapshot: ${hasExistingElements ? JSON.stringify(forModel) : 'EMPTY'}]${focusLine}\n[Active View Mode: ${viewMode || 'SINGLE'}]\n[Active A4 Config: ${JSON.stringify(a4Config || {})}]\n[LANGUAGE REQUIREMENT: ${detectedLanguage}]\n${languageInstruction}\n\nNEW MESSAGE (read it together with the conversation above — it is usually a follow-up): ${prompt}`,
         },
       ],
     });
 
-    // Speed: thinking off (it tripled reply time), a hard timeout per model so an overloaded
-    // model can't hang the chat for ~35 s, and an overall budget — past it the instant local
-    // engine answers instead. Output limit is high enough that edits returning the whole
-    // design aren't cut off (a truncated reply used to trigger a second, slow call).
+    // Speed: thinking off (it tripled reply time), small edit patches instead of the whole design,
+    // and a hedged request: Flash Lite normally answers in ~1.5 s, but when Google's servers are
+    // busy it can stall — so if it hasn't answered after HEDGE_MS the backup model is asked too,
+    // and whichever answers first wins. A busy (503) error switches to the next model at once.
+    // fastest first; the hedge (2nd) is the same fast model again — a second request often lands on
+    // a less busy server. A model whose quota ran out (429) is skipped for a minute.
     const attempts: Array<{ model: string; timeoutMs: number; noThinking: boolean }> = [
-      // Flash Lite answers in ~2 s and is far less often overloaded; 3.6 Flash is the backup
       { model: 'gemini-flash-lite-latest', timeoutMs: 6000, noThinking: false }, // lite rejects a thinking budget
-      { model: 'gemini-3.6-flash', timeoutMs: 7000, noThinking: true },
-    ];
-    const TOTAL_BUDGET_MS = 16000;
-    const startedAt = Date.now();
+      { model: 'gemini-flash-lite-latest', timeoutMs: 6000, noThinking: false },
+      { model: 'gemini-3.6-flash', timeoutMs: 7000, noThinking: true }, // last resort
+    ].filter((a) => (AiStampService.quotaUntil.get(a.model) || 0) < Date.now());
+    if (!attempts.length) attempts.push({ model: 'gemini-flash-lite-latest', timeoutMs: 6000, noThinking: false });
+    const HEDGE_MS = 1200; // no answer yet → ask the backup model too (whichever answers first wins)
+    const TOTAL_BUDGET_MS = 12000;
     this.lastAiFailure = null;
     const genAI = new GoogleGenerativeAI(apiKey);
-    // "high demand" (503) spikes are usually over in a moment — retry each model once
-    const queue = attempts.flatMap((a) => [{ ...a, retry: false }, { ...a, retry: true }]);
-    let lastWasBusy = false;
+    const cleanName = (t: string) => t.replace(/kadeeja/gi, 'Clixio').replace(/euyra/gi, 'Clixio').replace(/inkora/gi, 'Clixio');
 
-    for (const { model: modelName, timeoutMs, noThinking, retry } of queue) {
-      if (retry && !lastWasBusy) continue; // only retry after a 503
-      if (retry) await new Promise((r) => setTimeout(r, 700));
-      lastWasBusy = false;
-      const remaining = TOTAL_BUDGET_MS - (Date.now() - startedAt);
-      if (remaining < 2000) break;
-      try {
-        const generationConfig: any = {
-          responseMimeType: 'application/json',
-          temperature: 0.1,
-          maxOutputTokens: 4096,
-        };
-        if (noThinking) generationConfig.thinkingConfig = { thinkingBudget: 0 };
-        const model = genAI.getGenerativeModel(
-          { model: modelName, systemInstruction, generationConfig },
-          { timeout: Math.min(timeoutMs, remaining) }
-        );
+    const askModel = async ({ model: modelName, timeoutMs, noThinking }: (typeof attempts)[number]): Promise<any> => {
+      const generationConfig: any = {
+        responseMimeType: 'application/json',
+        temperature: 0.1,
+        maxOutputTokens: 1536, // replies are short edit patches; a cap keeps a runaway answer from stalling
+      };
+      if (noThinking) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+      const model = genAI.getGenerativeModel({ model: modelName, systemInstruction, generationConfig }, { timeout: timeoutMs });
+      const t0 = Date.now();
+      const result = await model.generateContent({ contents: formattedContents });
+      const usage: any = (result.response as any).usageMetadata || {};
+      console.log(`⚡ ${modelName} replied in ${Date.now() - t0} ms (in ${usage.promptTokenCount ?? '?'} / out ${usage.candidatesTokenCount ?? '?'} tokens)`);
+      const jsonMatch = result.response.text().match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('no JSON in model reply');
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed && typeof parsed.reply === 'string') parsed.reply = cleanName(parsed.reply);
+      if (parsed && typeof parsed.summary === 'string') parsed.summary = cleanName(parsed.summary);
+      return parsed;
+    };
 
-        const t0 = Date.now();
-        const result = await model.generateContent({ contents: formattedContents });
-        console.log(`⚡ ${modelName} replied in ${Date.now() - t0} ms`);
-        const response = result.response;
-        const text = response.text();
-        
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            const parsed = JSON.parse(jsonMatch[0]);
-            if (parsed && typeof parsed.reply === 'string') {
-              parsed.reply = parsed.reply.replace(/kadeeja/gi, 'Clixio').replace(/euyra/gi, 'Clixio').replace(/inkora/gi, 'Clixio');
-            }
-            if (parsed && typeof parsed.summary === 'string') {
-              parsed.summary = parsed.summary.replace(/kadeeja/gi, 'Clixio').replace(/euyra/gi, 'Clixio').replace(/inkora/gi, 'Clixio');
-            }
-            return parsed;
-          } catch (e) {
-            console.error('Failed to parse Gemini JSON output:', e);
-            continue;
-          }
-        }
-      } catch (e: any) {
-        const msg = String(e?.message || e);
-        lastWasBusy = /\b503\b|high demand|overloaded|unavailable/i.test(msg);
-        this.lastAiFailure = /\b429\b|quota|rate limit/i.test(msg) ? 'quota' : lastWasBusy ? 'busy' : 'other';
-        console.warn(`Fast model ${modelName}${retry ? ' (retry)' : ''} error:`, msg.slice(0, 200));
-        continue;
-      }
-    }
-
-    return null;
+    return await new Promise<any>((resolve) => {
+      let settled = false;
+      let next = 0; // next attempt to start
+      let running = 0;
+      const timers: NodeJS.Timeout[] = [];
+      const finish = (value: any) => {
+        if (settled) return;
+        settled = true;
+        timers.forEach(clearTimeout);
+        resolve(value);
+      };
+      const launch = () => {
+        if (settled || next >= attempts.length) return;
+        const attempt = attempts[next++];
+        running++;
+        askModel(attempt).then(finish, (e: any) => {
+          running--;
+          const msg = String(e?.message || e);
+          const busy = /\b503\b|high demand|overloaded|unavailable/i.test(msg);
+          this.lastAiFailure = /\b429\b|quota|rate limit/i.test(msg) ? 'quota' : busy ? 'busy' : 'other';
+          if (this.lastAiFailure === 'quota') AiStampService.quotaUntil.set(attempt.model, Date.now() + 60_000);
+          console.warn(`Fast model ${attempt.model} error:`, msg.slice(0, 200));
+          if (next < attempts.length) launch(); // failed → next model straight away
+          else if (running === 0) finish(null);
+        });
+      };
+      launch();
+      timers.push(setTimeout(() => { if (running > 0 && next === 1) launch(); }, HEDGE_MS)); // slow → ask the backup too
+      timers.push(setTimeout(() => finish(null), TOTAL_BUDGET_MS));
+    });
   }
 
   /**

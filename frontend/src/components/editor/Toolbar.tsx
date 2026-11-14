@@ -7,9 +7,10 @@ import { STAMP_MOUNT_PRESETS } from '../../lib/units';
 import { Tooltip } from '../common/Tooltip';
 import { ShapeSizeBadge } from '../common/ShapeSizeBadge';
 import { ThemeToggle } from '../common/ThemeToggle';
-import { AccountMenu } from './AccountMenu';
 import { MyDesignsModal } from './MyDesignsModal';
 import { SaveSplitButton } from './SaveSplitButton';
+import { useAuth } from '../../context/AuthContext';
+import { requireLogin } from '../../lib/require-login';
 import {
   ArrowLeft,
   ChevronDown,
@@ -84,6 +85,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const [isMountOpen, setIsMountOpen] = useState(false);
   const [isZoomOpen, setIsZoomOpen] = useState(false);
   const [isDesignsOpen, setIsDesignsOpen] = useState(false);
+  const { user } = useAuth();
   // "Saved" only once the design really is on the account
   const needsSave = hasUnsavedChanges || !projectId;
   const [mountShapeFilter, setMountShapeFilter] = useState<string>('ALL');
@@ -419,7 +421,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <Tooltip content="My designs — your saved designs & templates" side="bottom">
               <button
                 type="button"
-                onClick={() => setIsDesignsOpen(true)}
+                onClick={() => requireLogin(user, 'designs') && setIsDesignsOpen(true)}
                 className="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-[12px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0 cursor-pointer"
               >
                 <History className="w-4 h-4" />
@@ -431,8 +433,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <SaveSplitButton />
             <MyDesignsModal isOpen={isDesignsOpen} onClose={() => setIsDesignsOpen(false)} />
 
-            {/* Account: history (my designs), save as template, log out */}
-            <span className="ml-1.5 flex"><AccountMenu /></span>
 
             {/* Export — the one primary action */}
             <Tooltip content="Export for laser / print" side="bottom">

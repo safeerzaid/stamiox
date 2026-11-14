@@ -17,9 +17,19 @@ import {
 import { A4StampInstance, A4SheetConfig, COMMON_A4_PRESET_SIZES } from '../types/a4-sheet';
 import { autoNestStampsOnA4, cloneStampToSize } from '../lib/a4-export-engine';
 import { STAMP_MOUNT_PRESETS } from '../lib/units';
-import { morphBetweenShapeFamilies, hasEdgeBorder, makeEdgeBorder } from '../lib/shape-morph';
+import { morphBetweenShapeFamilies, hasEdgeBorder, makeEdgeBorder, edgeBorderInset, fitCanvasToBorder, outermostBorderId, matchBordersToShape, realignBoxDesign, realignRoundDesign, convertToBestSize } from '../lib/shape-morph';
 import { ApiService } from '../lib/api';
 import { storeGet, storeSet } from '../lib/local-store';
+import { requireLogin } from '../lib/require-login';
+
+/** Signed in? (the auth token is kept in localStorage by AuthContext) */
+const hasAuthToken = () => {
+  try {
+    return !!localStorage.getItem('stamiox_auth_token');
+  } catch {
+    return false;
+  }
+};
 import { ensureFontsFor } from '../lib/font-loader';
 import { STAMP_TEMPLATES } from '../../../backend/src/data/templates';
 
@@ -140,6 +150,14 @@ interface EditorContextType {
   /** Save the current design to the account as a reusable template (always a new copy). */
   saveAsTemplate: (title: string) => Promise<boolean>;
   resetToBlank: (shape?: StampShapeType, width?: number, height?: number) => void;
+  // Pages (Figma style): each page holds its own design, kept when switching pages
+  pages: DesignPage[];
+  activePageId: string;
+  addPage: () => string;
+  switchPage: (id: string) => void;
+  renamePage: (id: string, name: string) => void;
+  deletePage: (id: string) => void;
+  duplicatePage: (id: string) => string;
 
   // A4 Multi-Stamp Gang-Sheet Imposition
   viewMode: 'SINGLE' | 'A4_SHEET';
@@ -167,7 +185,32 @@ interface EditorContextType {
 
 const EditorContext = createContext<EditorContextType | undefined>(undefined);
 
-export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export interface DesignPage {
+  id: string;
+  name: string;
+}
+/** Pages a free account can have; more pages need an upgrade. */
+export const FREE_PAGE_LIMIT = 10;
+const newPageId = () => 'page-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+/** A design handed to an isolated editor (e.g. one stamp of the A4 sheet opened in a popup). */
+export interface IsolatedDesign {
+  elements: StampElement[];
+  widthMm: number;
+  heightMm: number;
+  shape: StampShapeType;
+  inkColor: string;
+  title?: string;
+}
+
+// While an isolated editor (popup) is open, the main editor leaves the keyboard to it
+let openIsolatedEditors = 0;
+
+/**
+ * `isolated`: run a separate editor for one design — it starts from that design, never restores or
+ * saves the main work (current design / A4 sheet), and owns the keyboard while it is mounted.
+ */
+export const EditorProvider: React.FC<{ children: React.ReactNode; isolated?: IsolatedDesign }> = ({ children, isolated }) => {
   // Canvas Settings
   const [widthMm, setWidthMm] = useState<number>(40);
   const [heightMm, setHeightMm] = useState<number>(40);
@@ -259,6 +302,47 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const elementsRef = useRef<StampElement[]>(elements);
   elementsRef.current = elements;
+
+  // ── The background follows the outer border ──
+  // When the border at the stamp edge (ring / oval / box) is resized or reshaped, the canvas takes
+  // its shape and size on the next render (only while "Auto canvas shape" is on). After undo / redo
+  // the canvas is put back to fit the restored border.
+  const canvasRef = useRef({ shape: shape as string, widthMm, heightMm, auto: autoCanvasShape });
+  canvasRef.current = { shape, widthMm, heightMm, auto: autoCanvasShape };
+  const pendingBorderFitRef = useRef<{ id: string | null; inset?: number; before?: StampElement } | null>(null);
+  // undo / redo only re-fit the canvas once the background has followed a border in this design
+  const borderFitDoneRef = useRef(false);
+  // the versions of this design in each shape it had (exact copies), while it isn't edited
+  const shapeMemoryRef = useRef<{ produced: string | null; versions: Record<string, { elements: StampElement[]; widthMm: number; heightMm: number }> }>({ produced: null, versions: {} });
+  useEffect(() => {
+    borderFitDoneRef.current = false; // a newly opened design / template starts fresh
+    pendingBorderFitRef.current = null;
+    shapeMemoryRef.current = { produced: null, versions: {} };
+  }, [designLoadKey]);
+  useEffect(() => {
+    const pending = pendingBorderFitRef.current;
+    if (!pending) return;
+    pendingBorderFitRef.current = null;
+    const c = canvasRef.current;
+    if (!c.auto) return;
+    if (pending.id === null && !borderFitDoneRef.current) return;
+    const id = pending.id ?? outermostBorderId(elements as any[]);
+    if (!id) return;
+    const fit = fitCanvasToBorder(elements as any[], id, c, pending.inset, pending.before);
+    if (!fit) return;
+    borderFitDoneRef.current = true;
+    setShape(fit.shape as StampShapeType);
+    setWidthMm(fit.widthMm);
+    setHeightMm(fit.heightMm);
+    setMountPresetState(
+      STAMP_MOUNT_PRESETS.find((p) => p.shape === fit.shape && p.widthMm === fit.widthMm && p.heightMm === fit.heightMm) || null
+    );
+    if (fit.elements !== (elements as any[])) {
+      elementsRef.current = fit.elements as StampElement[];
+      setElements(fit.elements as StampElement[]);
+    }
+    setHasUnsavedChanges(true);
+  }, [elements]);
   const selectedIdRef = useRef<string | null>(selectedId);
   selectedIdRef.current = selectedId;
   const selectedIdsRef = useRef<string[]>(selectedIds);
@@ -422,6 +506,24 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const VIEW_MODE_KEY = 'stamiox_view_mode';
   const [a4Restored, setA4Restored] = useState(false); // "work restored" — the editor waits for it
   useEffect(() => {
+    if (isolated) {
+      setElements(JSON.parse(JSON.stringify(isolated.elements || [])));
+      setWidthMm(isolated.widthMm);
+      setHeightMm(isolated.heightMm);
+      setShape(isolated.shape || 'ROUND');
+      if (isolated.inkColor) setInkColor(isolated.inkColor);
+      setMountPresetState(
+        STAMP_MOUNT_PRESETS.find((p) => p.shape === isolated.shape && p.widthMm === isolated.widthMm && p.heightMm === isolated.heightMm) || null
+      );
+      if (isolated.title) setProjectTitle(isolated.title);
+      setSelectedIdState(null);
+      setSelectedIdsState([]);
+      setA4Restored(true);
+      openIsolatedEditors += 1;
+      return () => {
+        openIsolatedEditors = Math.max(0, openIsolatedEditors - 1);
+      };
+    }
     let cancelled = false;
     const designBefore = designLoadKeyRef.current;
     (async () => {
@@ -430,11 +532,25 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch {
         /* storage unavailable */
       }
-      const [design, rawSheet] = await Promise.all([
+      const [design, rawSheet, storedPages] = await Promise.all([
         storeGet<any>('current-design'),
         storeGet<any>('a4-sheet'),
+        storeGet<any>('pages'),
       ]);
       if (cancelled) return;
+
+      // Pages — the open page's design is "current-design"; the other pages are kept in "pages"
+      if (storedPages && Array.isArray(storedPages.pages) && storedPages.pages.length) {
+        setPages(storedPages.pages);
+        setActivePageId(
+          storedPages.pages.some((p: DesignPage) => p.id === storedPages.activeId) ? storedPages.activeId : storedPages.pages[0].id
+        );
+        pageDesignsRef.current = storedPages.designs && typeof storedPages.designs === 'object' ? storedPages.designs : {};
+      } else {
+        const first = { id: newPageId(), name: 'Page 1' };
+        setPages([first]);
+        setActivePageId(first.id);
+      }
 
       let sheet = rawSheet;
       // Purge legacy auto-populated A4 stamps from previous sessions so A4 sheet starts clean
@@ -491,7 +607,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, []);
 
   useEffect(() => {
-    if (!a4Restored) return;
+    if (!a4Restored || isolated) return;
     try {
       localStorage.setItem(VIEW_MODE_KEY, viewMode);
     } catch {
@@ -501,7 +617,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // save shortly after the last change (a drag doesn't write on every frame)
   useEffect(() => {
-    if (!a4Restored) return;
+    if (!a4Restored || isolated) return;
     const t = window.setTimeout(() => {
       storeSet('current-design', {
         elements,
@@ -523,7 +639,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [a4Restored, elements, widthMm, heightMm, shape, inkColor, mountPreset, projectTitle, projectId, laserMirror, distressEffect, hasUnsavedChanges]);
 
   useEffect(() => {
-    if (!a4Restored) return;
+    if (!a4Restored || isolated) return;
     const t = window.setTimeout(() => {
       storeSet('a4-sheet', { instances: a4Instances, config: a4Config });
     }, 300);
@@ -541,12 +657,13 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // a pending save must not be lost when the tab is closed / refreshed right after a change
   const latestWorkRef = useRef<() => void>(() => {});
   latestWorkRef.current = () => {
-    if (!a4Restored) return;
+    if (!a4Restored || isolated) return;
     storeSet('current-design', {
       elements, widthMm, heightMm, shape, inkColor, mountPresetId: mountPreset?.id ?? null, projectTitle, projectId,
       laserMirror, distressEffect, editingA4InstanceId: null, hasUnsavedChanges, savedAt: Date.now(),
     });
     storeSet('a4-sheet', { instances: a4Instances, config: a4Config });
+    if (activePageId) storeSet('pages', { pages, activeId: activePageId, designs: pageDesignsRef.current });
   };
   useEffect(() => {
     const flush = () => latestWorkRef.current();
@@ -560,6 +677,136 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       document.removeEventListener('visibilitychange', onHidden);
     };
   }, []);
+
+  // ── Pages ──
+  const [pages, setPages] = useState<DesignPage[]>([]);
+  const [activePageId, setActivePageId] = useState<string>('');
+  const pageDesignsRef = useRef<Record<string, any>>({}); // saved designs of the pages that are not open
+
+  const savePages = (list: DesignPage[], activeId: string) => {
+    if (isolated) return;
+    storeSet('pages', { pages: list, activeId, designs: pageDesignsRef.current });
+  };
+  useEffect(() => {
+    if (!a4Restored || isolated || !activePageId) return;
+    savePages(pages, activePageId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [a4Restored, pages, activePageId]);
+
+  /** The open page's design, in the same shape as the "current-design" store entry. */
+  const snapshotDesign = () => ({
+    elements: JSON.parse(JSON.stringify(elements)),
+    widthMm, heightMm, shape, inkColor,
+    mountPresetId: mountPreset?.id ?? null,
+    projectTitle, projectId, laserMirror, distressEffect,
+    editingA4InstanceId: null,
+    hasUnsavedChanges,
+    savedAt: Date.now(),
+  });
+
+  /** Puts a stored page design on the canvas (a fresh page gets an empty canvas of the same stamp size). */
+  const openPageDesign = (design: any | null, pageName: string) => {
+    bumpDesignLoad();
+    const d = design || {
+      elements: [], widthMm, heightMm, shape, inkColor, mountPresetId: mountPreset?.id ?? null,
+      projectTitle: pageName, projectId: null, laserMirror: false, distressEffect: false, hasUnsavedChanges: false,
+    };
+    setElements(Array.isArray(d.elements) ? d.elements : []);
+    setWidthMm(d.widthMm || 40);
+    setHeightMm(d.heightMm || 40);
+    setShape(d.shape || 'ROUND');
+    if (d.inkColor) setInkColor(d.inkColor);
+    setMountPresetState(STAMP_MOUNT_PRESETS.find((p) => p.id === d.mountPresetId) || null);
+    setProjectTitle(typeof d.projectTitle === 'string' ? d.projectTitle : pageName);
+    setProjectId(d.projectId ?? null);
+    setLaserMirror(!!d.laserMirror);
+    setDistressEffect(!!d.distressEffect);
+    setEditingA4InstanceId(null);
+    setHasUnsavedChanges(!!d.hasUnsavedChanges);
+    setSelectedIdState(null);
+    setSelectedIdsState([]);
+    historyRef.current = [];
+    redoStackRef.current = [];
+    setHistory([]);
+    setRedoStack([]);
+    setPan({ x: 0, y: 0 });
+    // write it straight away so a refresh right after switching opens this page
+    storeSet('current-design', { ...d, savedAt: Date.now() });
+  };
+
+  const switchPage = (id: string) => {
+    if (id === activePageId || !pages.some((p) => p.id === id)) return;
+    pageDesignsRef.current = { ...pageDesignsRef.current, [activePageId]: snapshotDesign() };
+    const target = pageDesignsRef.current[id] || null;
+    const { [id]: _open, ...rest } = pageDesignsRef.current;
+    pageDesignsRef.current = rest;
+    openPageDesign(target, pages.find((p) => p.id === id)?.name || 'Page');
+    setActivePageId(id);
+    savePages(pages, id);
+  };
+
+  const nextPageName = (list: DesignPage[]) => {
+    let n = list.length + 1;
+    while (list.some((p) => p.name === 'Page ' + n)) n += 1;
+    return 'Page ' + n;
+  };
+
+  const addPage = () => {
+    const page = { id: newPageId(), name: nextPageName(pages) };
+    pageDesignsRef.current = { ...pageDesignsRef.current, [activePageId]: snapshotDesign() };
+    const list = [...pages, page];
+    setPages(list);
+    openPageDesign(null, page.name);
+    setActivePageId(page.id);
+    savePages(list, page.id);
+    return page.id;
+  };
+
+  const duplicatePage = (id: string) => {
+    const src = pages.find((p) => p.id === id);
+    if (!src) return '';
+    const design = id === activePageId ? snapshotDesign() : pageDesignsRef.current[id];
+    const page = { id: newPageId(), name: src.name + ' copy' };
+    pageDesignsRef.current = {
+      ...pageDesignsRef.current,
+      [activePageId]: snapshotDesign(),
+    };
+    const list = [...pages];
+    list.splice(pages.indexOf(src) + 1, 0, page);
+    setPages(list);
+    openPageDesign(design ? { ...JSON.parse(JSON.stringify(design)), projectId: null } : null, page.name);
+    setActivePageId(page.id);
+    savePages(list, page.id);
+    return page.id;
+  };
+
+  const renamePage = (id: string, name: string) => {
+    const clean = name.trim().slice(0, 60);
+    if (!clean) return;
+    setPages((prev) => prev.map((p) => (p.id === id ? { ...p, name: clean } : p)));
+  };
+
+  const deletePage = (id: string) => {
+    if (pages.length <= 1) return; // there is always one page
+    const idx = pages.findIndex((p) => p.id === id);
+    if (idx < 0) return;
+    const list = pages.filter((p) => p.id !== id);
+    const { [id]: _gone, ...rest } = pageDesignsRef.current;
+    pageDesignsRef.current = rest;
+    if (id === activePageId) {
+      const next = list[Math.max(0, idx - 1)];
+      const target = pageDesignsRef.current[next.id] || null;
+      const { [next.id]: _open, ...others } = pageDesignsRef.current;
+      pageDesignsRef.current = others;
+      openPageDesign(target, next.name);
+      setActivePageId(next.id);
+      setPages(list);
+      savePages(list, next.id);
+    } else {
+      setPages(list);
+      savePages(list, activePageId);
+    }
+  };
 
   const editA4InstanceInSingleEditor = useCallback(
     (instanceId: string) => {
@@ -593,7 +840,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     if (familyChange && elements.length > 0 && widthMm > 0 && heightMm > 0) {
       // Round ↔ Square/Rect: edge borders become the new shape, the rest is scaled to fit inside.
-      const adapted = morphBetweenShapeFamilies(elements, widthMm, heightMm, preset.widthMm, preset.heightMm, preset.shape);
+      const adapted = morphBetweenShapeFamilies(elements, widthMm, heightMm, preset.widthMm, preset.heightMm, preset.shape, shape);
       result = adapted;
       pushHistory(elements);
       setElements(adapted);
@@ -880,18 +1127,64 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // Switch the canvas to a shape using the preset closest in area (borders are morphed by setMountPreset)
   const switchCanvasShape = (target: StampShapeType, opts?: { ensureBorder?: boolean }) => {
-    if (!target || target === shape) return;
+    if (!target) return;
+    if (target === shape) {
+      // already this shape — but borders inside may not be (e.g. square frames left in a round
+      // stamp): choosing the shape again turns them into it too
+      const fixed = matchBordersToShape(elements as any[], target, widthMm, heightMm);
+      // a square / rectangular stamp is also re-aligned (frames, top & bottom lines, middle part)
+      const next = (target === 'SQUARE' || target === 'RECTANGULAR')
+        ? realignBoxDesign(fixed.elements as any[], target, widthMm, heightMm)
+        : realignRoundDesign(fixed.elements as any[], target, widthMm, heightMm);
+      if (JSON.stringify(next) !== JSON.stringify(elements)) {
+        pushHistory(elements);
+        setElements(next as StampElement[]);
+        setHasUnsavedChanges(true);
+      }
+      return;
+    }
     const area = widthMm * heightMm;
     const candidates = STAMP_MOUNT_PRESETS.filter((p) => p.shape === target);
     if (!candidates.length) return;
-    const best = candidates.reduce((a, b) =>
+    let best = candidates.reduce((a, b) =>
       Math.abs(b.widthMm * b.heightMm - area) < Math.abs(a.widthMm * a.heightMm - area) ? b : a
     );
-    const next = setMountPreset(best);
-    // e.g. adding a Box to an empty round stamp: give the new shape its own border
-    if (opts?.ensureBorder && !hasEdgeBorder(next, best.widthMm, best.heightMm)) {
-      setElements([...next, makeEdgeBorder(best.shape, best.widthMm, best.heightMm) as StampElement]);
+    let next: StampElement[];
+    if (elements.length) {
+      // Going back to a shape this design already had, with no edits since the last shape change
+      // (round → square → oval → round): the exact earlier version comes back — nothing re-computed
+      const unchanged = shapeMemoryRef.current.produced === JSON.stringify(elements);
+      if (!unchanged) shapeMemoryRef.current.versions = {};
+      shapeMemoryRef.current.versions[shape] = { elements: JSON.parse(JSON.stringify(elements)), widthMm, heightMm };
+      const earlier = unchanged ? shapeMemoryRef.current.versions[target] : undefined;
+      let sizeW: number, sizeH: number;
+      if (earlier) {
+        next = JSON.parse(JSON.stringify(earlier.elements));
+        sizeW = earlier.widthMm;
+        sizeH = earlier.heightMm;
+      } else {
+        // the whole design follows, at the standard size where everything stays readable and clear
+        // of the frames (a bigger standard size rather than cramming)
+        const pick = convertToBestSize(elements as any[], { shape, widthMm, heightMm }, target, STAMP_MOUNT_PRESETS);
+        next = ((pick && pick.elements) || elements) as StampElement[];
+        sizeW = pick ? pick.widthMm : best.widthMm;
+        sizeH = pick ? pick.heightMm : best.heightMm;
+      }
+      best = candidates.find((p) => p.widthMm === sizeW && p.heightMm === sizeH) || { ...best, widthMm: sizeW, heightMm: sizeH };
+      pushHistory(elements);
+      setMountPresetState(candidates.includes(best) ? best : null);
+      setWidthMm(sizeW);
+      setHeightMm(sizeH);
+      setShape(target);
+      setHasUnsavedChanges(true);
+    } else {
+      next = setMountPreset(best);
     }
+    // e.g. adding a Box to an empty round stamp: give the new shape its own border
+    const addBorder = !!opts?.ensureBorder && !hasEdgeBorder(next, best.widthMm, best.heightMm);
+    if (addBorder) next = [...next, makeEdgeBorder(best.shape, best.widthMm, best.heightMm) as StampElement];
+    if (elements.length || addBorder) setElements(next);
+    shapeMemoryRef.current.produced = JSON.stringify(next); // what this shape change produced
   };
 
   // Add Element
@@ -910,6 +1203,13 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Update Element
   const updateElement = useCallback(
     (id: string, updates: Partial<StampElement>) => {
+      // resizing / reshaping the border at the stamp edge → the background follows it
+      const c = canvasRef.current;
+      if (c.auto && ['radius', 'rx', 'ry', 'width', 'height'].some((k) => k in (updates as any))) {
+        const before = elementsRef.current.find((el) => el.id === id);
+        const inset = before ? edgeBorderInset(before as any, c.widthMm, c.heightMm) : null;
+        if (inset !== null) pendingBorderFitRef.current = { id, inset, before };
+      }
       setElements((prev) => {
         const next = prev.map((el) => (el.id === id ? ({ ...el, ...updates } as StampElement) : el));
         return next;
@@ -1314,8 +1614,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setElements((prev) =>
       prev.map((el) => (targetIds.includes(el.id) ? { ...el, groupId: newGroupId } : el))
     );
-    setSelectedIds(targetIds);
-    setSelectedId(null);
+    setSelectedIds(targetIds); // the new group stays selected
     setHasUnsavedChanges(true);
     return newGroupId;
   }, [pushHistory]);
@@ -1362,6 +1661,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const restored = JSON.parse(JSON.stringify(previous));
     elementsRef.current = restored;
+    pendingBorderFitRef.current = { id: null }; // canvas back to fit the restored border
     setElements(restored);
   }, []);
 
@@ -1381,6 +1681,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const restored = JSON.parse(JSON.stringify(next));
     elementsRef.current = restored;
+    pendingBorderFitRef.current = { id: null };
     setElements(restored);
   }, []);
 
@@ -1511,6 +1812,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const saveProjectToCloud = async (): Promise<string | null> => {
+    if (!requireLogin(hasAuthToken(), 'save')) return null; // guest: ask to log in (incl. Ctrl+S)
     setIsSaving(true);
     try {
       let updated = false;
@@ -1558,6 +1860,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const saveAsTemplate = async (title: string): Promise<boolean> => {
+    if (!requireLogin(hasAuthToken(), 'save')) return false;
     try {
       const res = await ApiService.createProject({
         title: title.trim() || projectTitle,
@@ -1578,6 +1881,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Keyboard Shortcuts (Arrow keys for 0.5mm nudges, Shift+Arrows for 2mm nudges, Delete, Undo/Redo)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isolated && openIsolatedEditors > 0) return; // a popup editor owns the keyboard
       // Ignore when typing inside input or textarea
       if (
         document.activeElement?.tagName === 'INPUT' ||
@@ -1733,6 +2037,13 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         saveProjectToCloud,
         saveAsTemplate,
         resetToBlank,
+        pages,
+        activePageId,
+        addPage,
+        switchPage,
+        renamePage,
+        deletePage,
+        duplicatePage,
         // A4 Gang-Sheet Imposition
         viewMode,
         setViewMode,

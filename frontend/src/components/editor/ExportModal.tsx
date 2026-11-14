@@ -6,6 +6,7 @@ import { generateStampSvg } from '../../lib/svg-generator';
 import { MM_TO_PX } from '../../lib/units';
 import { jsPDF } from 'jspdf';
 import { embedFontsInSvg } from '../../lib/font-embed';
+import { exportStamp, type ExportFormat } from '../../lib/stamp-export';
 import {
   X,
   Download,
@@ -262,81 +263,20 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, onOpe
     }
   };
 
-  // 2. Download SVG Vector
-  const handleExportSvg = async () => {
-    setExportingKey('svg');
-    const svgWithFonts = await embedFontsInSvg(svgContent, elements as any);
-    const blob = new Blob([svgWithFonts], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${projectTitle.replace(/\s+/g, '_')}_vector.svg`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    setTimeout(() => setExportingKey(null), 1000);
-  };
-
-  // 3. Download Vector PDF in mm
-  const handleExportPdf = async () => {
-    setExportingKey('pdf');
-    const svgWithFonts = await embedFontsInSvg(svgContent, elements as any);
+  // 2–4. Downloads (shared with the AI's "export it as PDF")
+  const exportDesign = { widthMm, heightMm, inkColor, elements, projectTitle, invert: exportInvert, mirror: exportMirror };
+  const runExport = async (format: ExportFormat) => {
+    setExportingKey(format);
     try {
-      const orientation = widthMm >= heightMm ? 'landscape' : 'portrait';
-      const doc = new jsPDF({
-        orientation,
-        unit: 'mm',
-        format: [widthMm, heightMm],
-      });
-
-      const canvas = document.createElement('canvas');
-      const scaleFactor = 6;
-      canvas.width = widthMm * MM_TO_PX * scaleFactor;
-      canvas.height = heightMm * MM_TO_PX * scaleFactor;
-      const ctx = canvas.getContext('2d');
-
-      if (ctx) {
-        const img = new Image();
-        const svgBlob = new Blob([svgWithFonts], { type: 'image/svg+xml;charset=utf-8' });
-        const url = URL.createObjectURL(svgBlob);
-
-        img.onload = () => {
-          if (exportInvert) {
-            ctx.fillStyle = '#000000';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-          }
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          const imgData = canvas.toDataURL('image/png');
-          doc.addImage(imgData, 'PNG', 0, 0, widthMm, heightMm);
-          doc.save(`${projectTitle.replace(/\s+/g, '_')}_300dpi.pdf`);
-          URL.revokeObjectURL(url);
-          setTimeout(() => setExportingKey(null), 1000);
-        };
-        img.src = url;
-      }
+      await exportStamp(format, exportDesign);
     } catch (e) {
       console.error(e);
-      setExportingKey(null);
-    }
-  };
-
-  // 4. Download High-Res PNG (300 DPI)
-  const handleExportPng = async () => {
-    setExportingKey('png');
-    const blob = await generatePngBlob();
-    if (blob) {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${projectTitle.replace(/\s+/g, '_')}_300dpi.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
     }
     setTimeout(() => setExportingKey(null), 1000);
   };
+  const handleExportSvg = () => runExport('svg');
+  const handleExportPdf = () => runExport('pdf');
+  const handleExportPng = () => runExport('png');
 
   // 5. Copy 300 DPI PNG Image to Clipboard (Paste into WhatsApp Web, Word, Slack, etc.)
   const handleCopyImage = async () => {

@@ -1318,3 +1318,133 @@ EXTRA_OFFICIAL_BADGES.forEach((badge, idx) => {
 PROCEDURAL_EXTENSIONS.forEach((item) => {
   STAMP_CLIPART_CATALOG.push(item);
 });
+
+// ── Redrawn icons ────────────────────────────────────────────────────────────────────────────────
+// These were broken or unrecognisable (a "laurel wreath" that was a ring of dots, a "plane" that
+// was a star, shapeless blobs…). Clean stamp-friendly redraws on the same 24×24 grid: solid fills
+// or strokes ≥ 1.2, no white / transparent parts (a rubber stamp prints one ink). Same ids & names.
+
+const F = 'fill="currentColor"';
+const S = (w = 1.8) => `fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"`;
+const mirror = (inner: string) => `${inner}<g transform="translate(24 0) scale(-1 1)">${inner}</g>`;
+
+/** A laurel / olive branch pair forming a wreath (leaves along both sides of a ring). */
+const makeLaurelSvg = (leaves: number, r: number, leafRx: number, leafRy: number, berries = false) => {
+  const P = (deg: number, rad = r) => [12 + rad * Math.cos((deg * Math.PI) / 180), 12 + rad * Math.sin((deg * Math.PI) / 180)];
+  let side = '';
+  const [sx, sy] = P(112);
+  const [ex, ey] = P(248);
+  side += `<path d="M${sx.toFixed(2)} ${sy.toFixed(2)} A${r} ${r} 0 0 1 ${ex.toFixed(2)} ${ey.toFixed(2)}" ${S(1.2)}/>`;
+  for (let i = 0; i < leaves; i++) {
+    const a = 118 + i * (126 / Math.max(1, leaves - 1));
+    for (const o of [1, -1]) {
+      const [x, y] = P(a, r + o * (leafRy + 0.35));
+      const rot = a + 90 + o * -32;
+      side += `<ellipse cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" rx="${leafRx}" ry="${leafRy}" transform="rotate(${rot.toFixed(1)} ${x.toFixed(2)} ${y.toFixed(2)})" ${F}/>`;
+    }
+    if (berries && i % 2 === 1) {
+      const [bx, by] = P(a + 6, r - leafRy - 1.1);
+      side += `<circle cx="${bx.toFixed(2)}" cy="${by.toFixed(2)}" r="0.55" ${F}/>`;
+    }
+  }
+  // tip leaf at the top of each branch
+  const [tx, ty] = P(250, r);
+  side += `<ellipse cx="${tx.toFixed(2)}" cy="${ty.toFixed(2)}" rx="${leafRx}" ry="${leafRy}" transform="rotate(360 ${tx.toFixed(2)} ${ty.toFixed(2)})" ${F}/>`;
+  return mirror(side);
+};
+
+const REDRAWN: Record<string, string> = {
+  // 24-scallop notary seal (ring inside) with two ribbon tails
+  'scalloped-seal-24-ribbon': `<path d="${makeScallopPath(24, 8.4, 7.4, 12, 10)}" ${S(1.4)}/><circle cx="12" cy="10" r="4.8" ${S(1.4)}/><path d="M8.6 16.4 6.4 22.4l2.7-1.3 1.7 2.1 1-5.9zM15.4 16.4l2.2 6-2.7-1.3-1.7 2.1-1-5.9z" ${F}/>`,
+  // gavel striking its sound block
+  'legal-gavel-striking': `<g transform="rotate(-40 11 10)"><rect x="6" y="5.2" width="10" height="5" rx="1.2" ${F}/><rect x="4.8" y="4.4" width="2.2" height="6.6" rx="0.7" ${F}/><rect x="15" y="4.4" width="2.2" height="6.6" rx="0.7" ${F}/><rect x="10.1" y="10" width="1.8" height="10.5" rx="0.9" ${F}/></g><rect x="13.5" y="19.2" width="9" height="2.6" rx="0.9" ${F}/><rect x="15" y="17.4" width="6" height="2" rx="0.6" ${F}/>`,
+  // feather quill dipped in an inkpot
+  'quill-inkpot-parchment': `<path d="M21.2 2.2C14.8 3 10.2 7.6 8.6 14.2l1.6 1.4C16.6 14 20.9 9.4 21.2 2.2z" ${F}/><path d="M9.4 14.9 6.6 18.6" ${S(1.6)}/><path d="M2.5 17.6h7.4v3.6c0 .6-.4 1-1 1H3.5c-.6 0-1-.4-1-1z" ${F}/><rect x="3.8" y="15.8" width="4.8" height="1.6" rx="0.4" ${F}/>`,
+  // Lady Justice: raised scales, sword down
+  'lady-justice-silhouette': `<circle cx="13.5" cy="4.4" r="1.9" ${F}/><path d="M13.5 7.2 10.1 21.5h6.8z" ${F}/><path d="M12.7 8.8 7.6 6.6M14.3 8.8l4.4 3.6" ${S(1.5)}/><path d="M1.6 6.6h8M1.6 6.6.6 9.6M1.6 6.6l1 3M9.6 6.6l-1 3M9.6 6.6l1 3" ${S(1.1)}/><path d="M.2 9.6H3a1.4 1.4 0 01-2.8 0zM8.2 9.6H11a1.4 1.4 0 01-2.8 0z" ${F}/><path d="M18.7 9.6v11.4M17.2 12.4h3" ${S(1.5)}/>`,
+  // Victorian laurel wreath (two branches meeting at the bottom, tied)
+  'laurel-wreath-deluxe': `${makeLaurelSvg(7, 8, 1.55, 0.72)}<path d="M10.4 21.2 12 20l1.6 1.2M12 20v2.4" ${S(1.2)}/>`,
+  // classical olive branch wreath (slimmer leaves, olives)
+  'botanical-wreath-leaves': `${makeLaurelSvg(6, 8.2, 1.9, 0.55, true)}`,
+  // heraldic eagle with spread wings
+  'heraldic-eagle-crest': `${mirror('<path d="M10.4 9.4C7.4 6.2 4.4 5.2 1.4 5.6c1 1.1 1.6 2.3 1.8 3.5-.9.1-1.7.5-2.3 1 1.5.6 2.7 1.5 3.3 2.5-.8.2-1.5.6-2 1.2 2.6.6 5.6.1 8.2-1.6z" fill="currentColor"/>')}<path d="M12 5.8c-1.3 0-2.2 1-2.2 2.2v6.4L12 18.6l2.2-4.2V8c0-1.2-.9-2.2-2.2-2.2z" ${F}/><circle cx="12" cy="4.4" r="1.8" ${F}/><path d="M13.6 4.2 15.6 5l-1.9.8z" ${F}/><path d="M10.4 17.6 8 22h8l-2.4-4.4z" ${F}/>`,
+  // heraldic lion rampant (standing on hind legs, facing left)
+  'heraldic-lion-rampant': `<path d="M12 22.2s8.4-3.8 8.4-10.6V4.4L12 1.8 3.6 4.4v7.2c0 6.8 8.4 10.6 8.4 10.6z" ${S(1.7)}/><path d="${makeScallopPath(12, 6, 5, 12, 11.6)}" ${S(1.3)}/><circle cx="12" cy="11.6" r="3.2" ${S(1.3)}/><circle cx="10.8" cy="10.9" r="0.6" ${F}/><circle cx="13.2" cy="10.9" r="0.6" ${F}/><path d="M11.2 12.4h1.6L12 13.4z" ${F}/>`,
+  // classic fleur-de-lis
+  'fleur-de-lis-classic': `<path d="M12 1.8c-1.7 2-2.6 4.1-2.6 6.4 0 1.9 1 3.5 2.6 4.8 1.6-1.3 2.6-2.9 2.6-4.8 0-2.3-.9-4.4-2.6-6.4z" ${F}/>${mirror('<path d="M10.5 13.3C9.3 10.4 6.8 9 4.4 9.6c-1.7.5-2.5 2-1.8 3.4.5 1.1 2 1.4 2.9.6-.4-1 .1-1.9 1.1-2 1.5-.2 2.7 1.4 3 3.5z" fill="currentColor"/>')}<rect x="6.8" y="13.4" width="10.4" height="2.1" rx="0.6" ${F}/><path d="M10.8 15.5 10 19.6 7.8 21.8h8.4L14 19.6l-.8-4.1z" ${F}/>`,
+  // knight's great helm with eye slit and breathing holes
+  'medieval-crusader-helmet': `<path d="M5.6 6.6C5.6 4 8.4 2 12 2s6.4 2 6.4 4.6v12c0 1.8-1.4 3-3.2 3H8.8c-1.8 0-3.2-1.2-3.2-3z" ${S(1.8)}/><rect x="6.6" y="9" width="10.8" height="1.8" rx="0.4" ${F}/><rect x="11.1" y="10.8" width="1.8" height="7.4" rx="0.4" ${F}/><circle cx="8.6" cy="14.4" r="0.7" ${F}/><circle cx="8.6" cy="16.8" r="0.7" ${F}/><circle cx="15.4" cy="14.4" r="0.7" ${F}/><circle cx="15.4" cy="16.8" r="0.7" ${F}/>`,
+  // prescription sign (R with crossed tail)
+  'pharmacy-rx-symbol': `<path d="M6 21V3.4h5.4a4.4 4.4 0 010 8.8H6M10.6 12.2 20 21.6M20.2 14.6l-6.6 6.8" ${S(2.1)}/>`,
+  // DNA double helix
+  'dna-helix-genetics': `<path d="M7 2c0 5 10 5 10 10S7 17 7 22M17 2c0 5-10 5-10 10s10 5 10 10" ${S(1.8)}/><path d="M8 4h8M9.6 9.4h4.8M9.6 14.6h4.8M8 20h8" ${S(1.4)}/>`,
+  // two hands shaking
+  'handshake-deal': `<path d="M1 13.6 5 9.6l2.3 2.3-4 4zM23 13.6l-4-4-2.3 2.3 4 4z" ${F}/><path d="M6.6 11.2l3.4-3.4c.8-.8 2-.9 2.9-.3l.9.6.9-.6c.9-.6 2.1-.5 2.9.3l2.8 2.8-5.9 5.9c-.7.7-1.8.7-2.5 0z" ${S(1.6)}/><path d="M9.2 13.8l1.7-1.7M10.9 15.5l1.7-1.7M12.6 17.2l1.5-1.5M12.9 7.5 9.8 10.6" ${S(1.3)}/>`,
+  // fragile: a cracked wine glass
+  'fragile-glass-handle': `<path d="M6.8 2h10.4l-.7 6.4a4.6 4.6 0 01-9 0z" ${S(1.8)}/><path d="M11.6 2.2 10.6 5l1.9 1.4-1.2 2.8" ${S(1.4)}/><path d="M12 12.9V20M8 21.4h8" ${S(1.8)}/>`,
+  // aircraft (top view)
+  'air-cargo-plane': `<path d="M21.5 15.6v-2.2L13.6 8.6V3.6c0-.9-.7-1.6-1.6-1.6s-1.6.7-1.6 1.6v5L2.5 13.4v2.2l7.9-2.5V18l-2.2 1.6v1.8L12 20.3l3.8 1.1v-1.8L13.6 18v-4.9z" ${F}/>`,
+  // recycling: three chasing arrows
+  'recycle-eco-loop': [0, 120, 240].map((d) => `<g transform="rotate(${d} 12 12)"><path d="M8.6 4.8A8 8 0 0118 7.2" ${S(2)}/><path d="M19.7 4.3l-.3 4.5-4.2-1.6z" ${F}/></g>`).join(''),
+  // torch with flame
+  'torch-of-knowledge': `<path d="M12 1.4c2.6 2.3 3.4 4.1 2.8 5.6-.4 1-1.5 1.3-2.8 1.3s-2.4-.3-2.8-1.3c-.4-1 0-2.2 1-3.1.2 1 .7 1.6 1.3 1.7-.4-1.4 0-2.7.5-4.2z" ${F}/><rect x="7.6" y="8.8" width="8.8" height="2" rx="0.6" ${F}/><path d="M8.8 11h6.4l-2.2 11h-2z" ${F}/>`,
+  // owl
+  'wise-owl-perched': `<path d="M12 3.2c-1.2 0-2.3.4-3.1 1.1L6 2.6v6.2C5.4 10 5 11.5 5 13c0 4.4 3.1 8 7 8s7-3.6 7-8c0-1.5-.4-3-1-4.2V2.6l-2.9 1.7c-.8-.7-1.9-1.1-3.1-1.1z" ${S(1.7)}/><circle cx="9.3" cy="10" r="2.3" ${S(1.4)}/><circle cx="14.7" cy="10" r="2.3" ${S(1.4)}/><circle cx="9.3" cy="10" r="1" ${F}/><circle cx="14.7" cy="10" r="1" ${F}/><path d="M12 11.6l-1 1.6h2z" ${F}/><path d="M9.4 16l1.3 1 1.3-1 1.3 1 1.3-1" ${S(1.2)}/>`,
+  // ear of wheat
+  'wheat-stalk-harvest': `<path d="M12 22V5" ${S(1.6)}/><ellipse cx="12" cy="3.6" rx="1.1" ry="2.1" ${F}/>${[7, 10.4, 13.8].map((y) => mirror(`<ellipse cx="10.2" cy="${y}" rx="1.15" ry="2.3" transform="rotate(-38 10.2 ${y})" fill="currentColor"/>`)).join('')}`,
+  // tree of life: round canopy, trunk and roots
+  'tree-of-life-botanical': `<circle cx="12" cy="9" r="7" ${F}/><path d="M10.8 14.5h2.4v3.7l3.3 3.2h-2.7L12 19.8l-1.8 1.6H7.5l3.3-3.2z" ${F}/><path d="M4 22h16" ${S(1.6)}/>`,
+  // water droplet
+  'water-drop-pure': `<path d="M12 2.4S5.5 9.6 5.5 14.2a6.5 6.5 0 0013 0C18.5 9.6 12 2.4 12 2.4z" ${S(1.8)}/><path d="M9 14.6a3.1 3.1 0 002.7 3" ${S(1.5)}/>`,
+  // crossed hammer and wrench
+  'crossed-hammer-wrench': `<g transform="rotate(45 12 12)"><rect x="11.1" y="6.5" width="1.8" height="15" rx="0.9" ${F}/><rect x="7.2" y="2.8" width="9.6" height="3.8" rx="0.8" ${F}/></g><g transform="rotate(-45 12 12)"><rect x="11.1" y="7.5" width="1.8" height="14" rx="0.9" ${F}/><path d="M9 2.4v3c0 1.7 1.3 3 3 3s3-1.3 3-3v-3l-1.6 1.2v2.2h-2.8V3.6z" ${F}/></g>`,
+  // Victorian corner flourish
+  'corner-flourish-victorian': `<path d="M3 21V9.5C3 5.9 5.9 3 9.5 3H21" ${S(1.8)}/><path d="M6.6 21v-7.2a5.2 5.2 0 015.2-5.2H21" ${S(1.2)}/><path d="M3 9.6c2.2-1.2 4 .1 3.6 1.8-.3 1.2-1.8 1.6-2.6.8M9.6 3c-1.2 2.2.1 4 1.8 3.6 1.2-.3 1.6-1.8.8-2.6" ${S(1.3)}/><circle cx="21" cy="3" r="1.1" ${F}/><circle cx="3" cy="21" r="1.1" ${F}/>`,
+  // eco planet: globe with a leaf
+  'ext-badge-15': `<circle cx="12" cy="12" r="9.5" ${S(1.8)}/><path d="M7.6 16.6c0-5.2 3.6-8.8 9.2-9.2.2 5.6-3.3 9.2-8.4 9.2z" ${F}/>`,
+  // rearing stallion: horse head & neck (chess-knight style)
+  'ext-badge-17': `<path d="M6.6 21.6h11.2l-.8-3.8c1.5-2.6 2-5.6 1.4-8.6-.5-2.6-2.4-4.6-5-5.2L12.3 2l-1.3 2c-2.2.6-4.6 2.6-6 5.2l-.9 2.6c-.3.9.4 1.8 1.3 1.8.6 0 1.2-.3 1.6-.8l1.8-1.7c.5.8 1.4 1.3 2.4 1.4L8 17.2z" ${F}/>`,
+  // royal crowned lion head
+  'ext-badge-18': `<path d="${makeScallopPath(14, 8.6, 7.4, 12, 14)}" ${S(1.4)}/><circle cx="12" cy="14" r="5" ${S(1.5)}/><path d="M8.2 2.2l1.6 1.8L12 1.2l2.2 2.8 1.6-1.8v3.6H8.2z" ${F}/><circle cx="10.2" cy="13" r="0.9" ${F}/><circle cx="13.8" cy="13" r="0.9" ${F}/><path d="M10.9 15.2h2.2L12 16.6z" ${F}/><path d="M10.4 17.6c.9.6 2.3.6 3.2 0" ${S(1.2)}/>`,
+  // stag head with antlers
+  'ext-badge-19': `<path d="M12 21.4c-1.6 0-2.8-1.8-3.2-4.2L7.6 12c1.2.2 2.5-.2 3.3-1h2.2c.8.8 2.1 1.2 3.3 1l-1.2 5.2c-.4 2.4-1.6 4.2-3.2 4.2z" ${F}/>${mirror('<path d="M8.1 11.6 4.8 10.4c.8 1.6 2 2.4 3.4 2.4z" fill="currentColor"/><path d="M10.4 11 8 7.4 6.6 2.6M8 7.4 3.8 6.4M7.2 5 9 2.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>')}`,
+  // wolf howling at the moon
+  'ext-badge-20': `<circle cx="12" cy="12" r="10.4" ${S(1.3)}/><path d="M5.6 4.8l4 3.8h4.8l4-3.8-.4 7.4c0 3.8-2.6 7-6 8.6-3.4-1.6-6-4.8-6-8.6z" ${S(1.5)}/><path d="M8.6 11.4l1.8.8M15.4 11.4l-1.8.8" ${S(1.4)}/><path d="M10.8 15.4h2.4L12 17z" ${F}/><path d="M12 17v1.4" ${S(1.2)}/>`,
+  // dolphin leaping
+  'ext-badge-22': `<path d="M3 14.6C5 9 10 6 15.5 6.5c2.5.2 4.5 1.3 5.8 3.1l-1.9.5c-.8-.7-1.8-1.1-2.9-1.1-4 0-7.5 2.6-9.3 6.4z" ${F}/><path d="M11 7.4l1.6-3.2 1.6 2.4zM10.4 11.4l-.8 2.6 2.4-1.8zM3 14.6 1 12.7l.6 3.4-.8 2.4 3.4-2z" ${F}/><path d="M4 20.4c2-1.4 4-1.4 6 0s4 1.4 6 0 4-1.4 6 0" ${S(1.4)}/>`,
+  // seven-branch menorah
+  'ext-badge-30': `<path d="M12 4.6V19.4" ${S(1.7)}/>${[1, 2, 3].map((k) => { const r = 2.7 * k; return `<path d="M${(12 - r).toFixed(1)} 6.6v1.6a${r} ${r} 0 0 0 ${(2 * r).toFixed(1)} 0V6.6" ${S(1.5)}/>`; }).join('')}${[-3, -2, -1, 0, 1, 2, 3].map((k) => `<ellipse cx="${(12 + 2.7 * k).toFixed(1)}" cy="4.4" rx="0.75" ry="1.15" ${F}/>`).join('')}<path d="M8 21.4h8M12 19.4v2" ${S(1.7)}/>`,
+  // vernier caliper
+  'ext-badge-35': `<rect x="2" y="4.6" width="20" height="3.2" rx="0.5" ${S(1.4)}/><path d="M5 4.6v1.4M7.5 4.6v1.4M10 4.6v1.4M19.5 4.6v1.4" ${S(0.9)}/><path d="M2 7.8h3.2v11.4L2 16.8z" ${F}/><rect x="12.6" y="3.2" width="5.4" height="6" rx="0.7" ${S(1.4)}/><path d="M12.6 9.2h3.2v9.8l-3.2-2.2z" ${F}/>`,
+  // tiger face
+  'ext-badge-49': `<path d="M12 21c-4.2 0-7.5-3.4-7.5-8 0-1.5.4-2.9 1-4.1L4.8 4.6l3.6 1.7c1.1-.5 2.3-.8 3.6-.8s2.5.3 3.6.8l3.6-1.7-.7 4.3c.6 1.2 1 2.6 1 4.1 0 4.6-3.3 8-7.5 8z" ${S(1.6)}/><path d="M12 6.6v2.6M9.8 7l.6 2M14.2 7l-.6 2M5.6 12.4l2.2.5M5.9 15l2.2-.2M18.4 12.4l-2.2.5M18.1 15l-2.2-.2" ${S(1.3)}/><ellipse cx="9.5" cy="12" rx="1.3" ry="0.85" transform="rotate(15 9.5 12)" ${F}/><ellipse cx="14.5" cy="12" rx="1.3" ry="0.85" transform="rotate(-15 14.5 12)" ${F}/><path d="M10.8 15h2.4L12 16.6z" ${F}/><path d="M12 16.6v1.2M10.4 18.3c.9.6 2.3.6 3.2 0" ${S(1.2)}/>`,
+  // bull head with horns and nose ring
+  'ext-badge-50': `<path d="M2.6 4.6c.5 3.2 2.6 4.8 5.8 4.8M21.4 4.6c-.5 3.2-2.6 4.8-5.8 4.8" ${S(1.9)}/><path d="M8 8.6h8c.6 2.8.2 5.6-1.2 8.3l-.8 3.5h-4l-.8-3.5C7.8 14.2 7.4 11.4 8 8.6z" ${F}/>${mirror('<path d="M8 9.6 4.6 11l3.4.9z" fill="currentColor"/>')}<circle cx="12" cy="21" r="1.5" ${S(1.2)}/>`,
+  // dove of peace carrying an olive branch
+  'ext-badge-51': `<path d="M2.6 14.6c2.6.6 5.4.4 8-.6l4.6-1.6c1.6-.5 2.7-1.8 3-3.4l.3-1.4 2.6-.6-2.4-1.2c-.6-1-1.8-1.5-3-1.1-1.4.5-2 2-1.8 3.4l-.6 1.2c-2.6-.4-5.2.4-7.2 2.2z" ${F}/><path d="M8.8 12.8C8 9 9.6 5.2 13.2 3.2c.3 1.8.1 3.4-.6 5 1-.3 1.9-.1 2.6.4-1.2 1.6-2.6 2.8-4.4 3.6zM2.6 14.6.8 16.9l2.6-.6z" ${F}/><path d="M20.8 7.9l2.4 2.2" ${S(1.1)}/><ellipse cx="22.6" cy="8.4" rx="0.9" ry="0.45" transform="rotate(-40 22.6 8.4)" ${F}/>`,
+  // pegasus: horse head with a wing
+  'ext-badge-53': `<path d="M8.6 21.6h10.2l-.8-3.4c1.3-2.3 1.8-5 1.3-7.7-.5-2.3-2.2-4.1-4.5-4.6L13.7 4.6l-1.2 1.8c-2 .5-4.1 2.3-5.4 4.6l-.8 2.3c-.3.8.4 1.6 1.2 1.6.5 0 1-.3 1.4-.7l1.6-1.5c.5.7 1.3 1.2 2.2 1.2L9.9 17.4z" ${F}/><path d="M15.4 9.6c1.2-3.6 3.6-6.4 7.2-7.4-.4 1.4-1.2 2.4-2.2 3.2 1 .1 1.7 0 2.4-.3-.6 1.4-1.6 2.3-3 2.8.8.2 1.4.2 2-.1-1.1 1.6-2.8 2.3-5 2.2z" ${F}/>`,
+  // human brain (two hemispheres with folds)
+  'ext-badge-55': `${mirror('<path d="M12 4.4c-.9-1.3-2.3-2-3.8-1.8-1.8.2-3.2 1.6-3.4 3.4-1.4.6-2.3 2-2.3 3.6 0 .9.3 1.7.8 2.4-.5.7-.8 1.6-.8 2.5 0 2 1.4 3.6 3.2 4 .4 1.9 2.1 3.4 4.1 3.4.9 0 1.6-.3 2.2-.8M8 8c1 .3 1.6 1.2 1.6 2.2M6.4 13c1.2-.3 2.4.2 3 1.2M9.2 17.2c.2-1 .9-1.7 1.9-1.9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>')}<path d="M12 4.4v16.2" ${S(1.5)}/>`,
+  // spine: stacked vertebrae
+  'ext-badge-56': [0, 1, 2, 3, 4, 5, 6]
+    .map((i) => {
+      const w = 5.2 + Math.min(i, 6 - i) * 0.7 + i * 0.25;
+      const y = 1.8 + i * 2.95;
+      return `<rect x="${(12 - w / 2).toFixed(2)}" y="${y.toFixed(2)}" width="${w.toFixed(2)}" height="2.1" rx="0.8" ${F}/><path d="M${(12 - w / 2).toFixed(2)} ${(y + 1.05).toFixed(2)}h-1.4M${(12 + w / 2).toFixed(2)} ${(y + 1.05).toFixed(2)}h1.4" ${S(1.1)}/>`;
+    })
+    .join(''),
+  // fixed: drew a star / chain instead of the subject
+  'ext-badge-9': `<circle cx="12" cy="12" r="10.6" ${S(1.4)}/><g transform="translate(2.4 2.6) scale(0.8)">${mirror('<path d="M10.4 9.4C7.4 6.2 4.4 5.2 1.4 5.6c1 1.1 1.6 2.3 1.8 3.5-.9.1-1.7.5-2.3 1 1.5.6 2.7 1.5 3.3 2.5-.8.2-1.5.6-2 1.2 2.6.6 5.6.1 8.2-1.6z" fill="currentColor"/>')}<path d="M12 5.8c-1.3 0-2.2 1-2.2 2.2v6.4L12 18.6l2.2-4.2V8c0-1.2-.9-2.2-2.2-2.2z" ${F}/><circle cx="12" cy="4.4" r="1.8" ${F}/><path d="M10.4 17.6 8 22h8l-2.4-4.4z" ${F}/></g>`,
+  // fixed: drew a star / chain instead of the subject
+  'ext-badge-16': `<path d="M.8 7.4c3.6-.2 6.6 1.2 8.8 3.8L12 14.2l2.4-3c2.2-2.6 5.2-4 8.8-3.8-2.6 1.4-4.6 3.4-6 6l-1.8 3.2c-.6 1-1.6 1.6-2.8 1.6h-1.2c-1.2 0-2.2-.6-2.8-1.6l-1.8-3.2C5.4 10.8 3.4 8.8.8 7.4z" ${F}/><circle cx="12" cy="12.6" r="1.9" ${F}/><path d="M13.6 12.4l1.8.6-1.7.7z" ${F}/><path d="M10.6 18.2 9 21.6h6l-1.6-3.4z" ${F}/>`,
+  // fixed: drew a star / chain instead of the subject
+  'ext-badge-52': `<path d="M1 9.4c3.2-.4 6 .6 8.4 2.8L12 14.6l2.6-2.4C17 10 19.8 9 23 9.4c-2.6 1-4.6 2.6-6.2 4.8l-1.6 2.4c-.6.9-1.6 1.4-2.6 1.4h-1.2c-1 0-2-.5-2.6-1.4l-1.6-2.4C5.6 12 3.6 10.4 1 9.4z" ${F}/><path d="M10.8 17.8 12 21.4l1.2-3.6z" ${F}/><circle cx="12" cy="12.4" r="1.5" ${F}/>`,
+  // fixed: drew a star / chain instead of the subject
+  'ext-badge-47': `<rect x="6.4" y="7" width="11.2" height="8.2" rx="1" ${S(1.6)}/><path d="M6.8 7.6 12 11.6l5.2-4" ${S(1.4)}/><path d="M5.6 9.2C3.8 8.4 2.2 8.4 1 9.2c.8.2 1.4.6 1.8 1.2-.6.1-1.1.4-1.4.8 1.4.2 2.8 0 4.2-.6zM18.4 9.2c1.8-.8 3.4-.8 4.6 0-.8.2-1.4.6-1.8 1.2.6.1 1.1.4 1.4.8-1.4.2-2.8 0-4.2-.6z" ${F}/>`,
+};
+
+for (const item of STAMP_CLIPART_CATALOG) {
+  const svg = REDRAWN[item.id];
+  if (svg) item.svg = svg;
+}

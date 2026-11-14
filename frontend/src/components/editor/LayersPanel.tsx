@@ -4,12 +4,17 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useEditor } from '../../context/EditorContext';
 import { STAMP_TEMPLATES } from '../../../../backend/src/data/templates';
 import { generateStampSvg } from '../../lib/svg-generator';
+import { designInShape } from '../../lib/shape-morph';
+import { STAMP_MOUNT_PRESETS } from '../../lib/units';
 import { rankTemplates } from '../../lib/template-ranking';
 import { importTemplateFile, loadMyTemplates, saveMyTemplates, type UserTemplate } from '../../lib/template-io';
 import { ApiService } from '../../lib/api';
 import { useFavouriteTemplates } from '../../lib/favourite-templates';
+import { PagesSection } from './PagesSection';
+import { AccountMenu } from './AccountMenu';
 import {
   Layers,
+  Files,
   LayoutGrid,
   Search,
   Eye,
@@ -32,6 +37,9 @@ import {
   Upload as UploadIcon,
   BookmarkPlus,
   X as XIcon,
+  ChevronRight,
+  BoxSelect,
+  Ungroup,
 } from 'lucide-react';
 
 interface LayersPanelProps {
@@ -53,12 +61,23 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     loadTemplate,
     isLeftSidebarOpen,
     toggleLeftSidebar,
+    ungroupElements,
+    pages,
   } = useEditor();
 
   const [activeTab, setActiveTab] = useState<'layers' | 'templates'>('layers');
   const [searchQuery, setSearchQuery] = useState('');
-  const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
-  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  // drag & drop works on ids: a single layer, or a whole group ("g:<groupId>")
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [dragOverKey, setDragOverKey] = useState<string | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
+  const toggleGroupOpen = (gid: string) =>
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(gid)) next.delete(gid);
+      else next.add(gid);
+      return next;
+    });
 
   // Resizable Panel Width State (Figma / VS Code style)
   const [panelWidth, setPanelWidth] = useState<number>(260);
@@ -143,45 +162,229 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     return label.includes(searchQuery.toLowerCase());
   });
 
-  // Drag and Drop Layer Reordering handlers
-  const handleDragStart = (e: React.DragEvent, index: number) => {
-    setDraggedIdx(index);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', `${index}`);
-  };
+  // Group names in the order the groups were made: Group 1, Group 2, …
+  const groupNames = useMemo(() => {
+    const m = new Map<string, string>();
+    elements.forEach((e: any) => {
+      if (e.groupId && !m.has(e.groupId)) m.set(e.groupId, `Group ${m.size + 1}`);
+    });
+    return m;
+  }, [elements]);
 
-  const handleDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    if (dragOverIdx !== index) {
-      setDragOverIdx(index);
+  // Top-most layer first; a group shows once (where its top-most member is) with its members under it
+  type LayerItem = { kind: 'el'; el: any } | { kind: 'group'; gid: string; members: any[] };
+  const layerItems: LayerItem[] = (() => {
+    if (searchQuery) return [...filteredElements].reverse().map((el) => ({ kind: 'el' as const, el }));
+    const top = [...elements].reverse() as any[];
+    const seen = new Set<string>();
+    const items: LayerItem[] = [];
+    for (const el of top) {
+      if (!el.groupId) {
+        items.push({ kind: 'el', el });
+        continue;
+      }
+      if (seen.has(el.groupId)) continue;
+      seen.add(el.groupId);
+      const members = top.filter((x) => x.groupId === el.groupId);
+      items.push(members.length > 1 ? { kind: 'group', gid: el.groupId, members } : { kind: 'el', el });
     }
+    return items;
+  })();
+
+  const idsForKey = (key: string) =>
+    key.startsWith('g:') ? elements.filter((e: any) => e.groupId === key.slice(2)).map((e) => e.id) : [key];
+
+  // Move the dragged layer(s) to just above the target row
+  const moveLayers = (fromKey: string, toKey: string) => {
+    const ids = idsForKey(fromKey);
+    const targetIds = idsForKey(toKey);
+    if (!ids.length || !targetIds.length || targetIds.some((id) => ids.includes(id))) return;
+    const top = [...elements].reverse();
+    const moving = top.filter((e) => ids.includes(e.id));
+    const rest = top.filter((e) => !ids.includes(e.id));
+    const at = rest.findIndex((e) => targetIds.includes(e.id));
+    if (at < 0) return;
+    rest.splice(at, 0, ...moving);
+    reorderElements([...rest].reverse());
   };
 
-  const handleDrop = (e: React.DragEvent, targetIndex: number) => {
-    e.preventDefault();
-    if (draggedIdx === null || draggedIdx === targetIndex) {
-      setDraggedIdx(null);
-      setDragOverIdx(null);
-      return;
-    }
+  const dragProps = (key: string) => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      e.stopPropagation();
+      setDragKey(key);
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', key);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'move';
+      if (dragOverKey !== key) setDragOverKey(key);
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (dragKey && dragKey !== key) moveLayers(dragKey, key);
+      setDragKey(null);
+      setDragOverKey(null);
+    },
+    onDragEnd: () => {
+      setDragKey(null);
+      setDragOverKey(null);
+    },
+  });
 
-    // Work with displayed list order (top-most layer at index 0)
-    const newReversed = [...elements].reverse();
-    const [movedItem] = newReversed.splice(draggedIdx, 1);
-    newReversed.splice(targetIndex, 0, movedItem);
+  const rowTone = (key: string, selected: boolean, hidden: boolean, tint = false) =>
+    dragOverKey === key && dragKey !== key
+      ? 'border-t-2 border-t-[#0d99ff] bg-[#f0f7ff] dark:bg-blue-950/40 border-transparent'
+      : dragKey === key
+      ? 'opacity-35 bg-slate-100 dark:bg-slate-800 border-dashed border-slate-300 dark:border-slate-700'
+      : selected
+      ? 'bg-[#0d99ff] text-white font-semibold shadow-xs border-[#0d99ff]'
+      : tint
+      ? 'bg-[#e5f2ff] dark:bg-blue-950/40 text-slate-800 dark:text-slate-100 border-transparent'
+      : hidden
+      ? 'bg-transparent text-slate-400 opacity-60 hover:bg-slate-100 dark:hover:bg-slate-800 border-transparent'
+      : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border-transparent';
 
-    // Canvas renders from back-to-front (index 0 is back, last index is front)
-    const newElements = [...newReversed].reverse();
-    reorderElements(newElements);
+  const actionBtn = (selected: boolean, danger = false) =>
+    `p-1 rounded transition-colors ${
+      selected
+        ? `text-white ${danger ? 'hover:bg-red-600' : 'hover:bg-white/20'}`
+        : `text-slate-400 ${danger ? 'hover:text-red-600' : 'hover:text-slate-700 dark:hover:text-slate-200'} hover:bg-slate-200 dark:hover:bg-slate-700`
+    }`;
 
-    setDraggedIdx(null);
-    setDragOverIdx(null);
+  /** One layer row. `inGroup`: shown under its group (indented; clicking selects only this layer). */
+  const renderLayerRow = (el: any, inGroup: boolean, groupSelected = false) => {
+    const isSelected = !groupSelected && (selectedId === el.id || selectedIds.includes(el.id));
+    const isHidden = el.visible === false;
+    return (
+      <div
+        key={el.id}
+        {...dragProps(el.id)}
+        onClick={(e) => {
+          if (e.shiftKey) {
+            setSelectedIds(selectedIds.includes(el.id) ? selectedIds.filter((id) => id !== el.id) : [...selectedIds, el.id]);
+          } else if (el.groupId && !inGroup) {
+            const groupMembers = elements.filter((x) => x.groupId === el.groupId);
+            setSelectedIds(groupMembers.map((x) => x.id));
+          } else {
+            setSelectedId(el.id);
+            setSelectedIds([el.id]);
+          }
+        }}
+        className={`group relative flex items-center justify-between px-2 py-1.5 rounded-lg cursor-grab active:cursor-grabbing transition-all text-xs border ${rowTone(el.id, isSelected, isHidden, groupSelected)}`}
+      >
+        <div className="flex items-center gap-1.5 min-w-0 flex-1 pr-1">
+          {!inGroup && (
+            <GripVertical className={`w-3 h-3 shrink-0 opacity-0 group-hover:opacity-60 transition-opacity ${isSelected ? 'text-white' : 'text-slate-400'}`} />
+          )}
+          <span className={`shrink-0 ${isSelected ? 'text-white' : 'text-slate-500 dark:text-slate-400'}`}>{getIcon(el)}</span>
+          <span className="truncate text-xs font-medium leading-tight">{getLabel(el)}</span>
+        </div>
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              updateElement(el.id, { visible: isHidden ? true : false });
+            }}
+            className={actionBtn(isSelected)}
+            title={isHidden ? 'Show Layer' : 'Hide Layer'}
+          >
+            {isHidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              deleteElement(el.id);
+            }}
+            className={actionBtn(isSelected, true)}
+            title="Delete Layer"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    );
   };
 
-  const handleDragEnd = () => {
-    setDraggedIdx(null);
-    setDragOverIdx(null);
+  /** A group: header row (▸ Group N) and, when open, its layers indented under it. */
+  const renderGroup = (gid: string, members: any[]) => {
+    const key = `g:${gid}`;
+    const memberIds = members.map((m) => m.id);
+    const allSelected = memberIds.every((id) => selectedIds.includes(id)) && selectedIds.length === memberIds.length;
+    const allHidden = members.every((m) => m.visible === false);
+    const open = !collapsedGroups.has(gid);
+    const name = groupNames.get(gid) || 'Group';
+    return (
+      <div key={key}>
+        <div
+          {...dragProps(key)}
+          onClick={() => {
+            setSelectedIds(memberIds);
+          }}
+          aria-expanded={open}
+          className={`group relative flex items-center justify-between pl-1 pr-2 py-1.5 rounded-lg cursor-grab active:cursor-grabbing transition-all text-xs border ${rowTone(key, allSelected, allHidden)}`}
+        >
+          <div className="flex items-center gap-1 min-w-0 flex-1 pr-1">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleGroupOpen(gid);
+              }}
+              aria-label={open ? `Collapse ${name}` : `Expand ${name}`}
+              className={`w-4 h-4 rounded flex items-center justify-center shrink-0 cursor-pointer ${allSelected ? 'text-white hover:bg-white/20' : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
+            >
+              <ChevronRight className={`w-3 h-3 transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
+            </button>
+            <span className={`shrink-0 ${allSelected ? 'text-white' : 'text-slate-500 dark:text-slate-400'}`}>
+              <BoxSelect className="w-3.5 h-3.5" />
+            </span>
+            <span className="truncate text-xs font-medium leading-tight">{name}</span>
+          </div>
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                members.forEach((m) => updateElement(m.id, { visible: allHidden }));
+              }}
+              className={actionBtn(allSelected)}
+              title={allHidden ? 'Show group' : 'Hide group'}
+            >
+              {allHidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                ungroupElements(memberIds);
+              }}
+              className={actionBtn(allSelected)}
+              title="Ungroup (Ctrl+Shift+G)"
+            >
+              <Ungroup className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                memberIds.forEach((id) => deleteElement(id));
+                setSelectedIds([]);
+              }}
+              className={actionBtn(allSelected, true)}
+              title="Delete group"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+        {open && (
+          <div className="ml-[11px] pl-1.5 border-l border-slate-200 dark:border-slate-700 space-y-0.5 mt-0.5">
+            {members.map((m) => renderLayerRow(m, true, allSelected))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -210,47 +413,43 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
 
         {/* Animated Tab Switcher: Layers / Templates */}
         <div className="p-2 border-b border-slate-200 dark:border-slate-800 flex items-center gap-1.5 bg-white dark:bg-slate-900 shrink-0">
-          <div className="relative flex-1 flex p-1 bg-slate-100 dark:bg-slate-800/80 rounded-xl overflow-hidden">
-            {/* Smooth Sliding Active Pill Background (Hardware-accelerated) */}
-            <div
-              className="absolute top-1 bottom-1 rounded-lg bg-[#0d99ff] shadow-sm pointer-events-none transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
-              style={{
-                left: '4px',
-                width: 'calc(50% - 4px)',
-                transform: activeTab === 'layers' ? 'translateX(0%)' : 'translateX(100%)',
-              }}
+          <div role="tablist" aria-label="Left panel" className="relative flex-1 grid grid-cols-2 p-0.5 rounded-full bg-slate-100 dark:bg-slate-800">
+            {/* sliding highlight — same look as the Single / A4 sheet switch */}
+            <span
+              aria-hidden
+              className={`absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded-full bg-[#0d99ff] shadow-[0_2px_8px_rgba(13,153,255,0.35)] pointer-events-none transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+                activeTab === 'templates' ? 'translate-x-full' : ''
+              }`}
             />
-
             <button
               type="button"
+              role="tab"
+              aria-selected={activeTab === 'layers'}
               onClick={() => setActiveTab('layers')}
-              className={`relative z-10 flex-1 py-1 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all duration-200 cursor-pointer active:scale-95 ${
-                activeTab === 'layers'
-                  ? 'text-white'
-                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white'
+              className={`relative z-10 h-7 px-3 flex items-center justify-center gap-1.5 rounded-full text-[12px] whitespace-nowrap transition-colors cursor-pointer ${
+                activeTab === 'layers' ? 'text-white font-semibold' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 font-medium'
               }`}
             >
-              <Layers className="w-3.5 h-3.5" />
-              <span>Layers</span>
+              <Files className={`w-3.5 h-3.5 ${activeTab === 'layers' ? 'text-white' : ''}`} />
+              <span>Pages</span>
               <span
-                className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold transition-colors ${
-                  activeTab === 'layers' ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                className={`min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold tabular-nums flex items-center justify-center transition-colors ${
+                  activeTab === 'layers' ? 'bg-white/25 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-300'
                 }`}
               >
-                {elements.length}
+                {pages.length}
               </span>
             </button>
-
             <button
               type="button"
+              role="tab"
+              aria-selected={activeTab === 'templates'}
               onClick={() => setActiveTab('templates')}
-              className={`relative z-10 flex-1 py-1 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all duration-200 cursor-pointer active:scale-95 ${
-                activeTab === 'templates'
-                  ? 'text-white'
-                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white'
+              className={`relative z-10 h-7 px-3 flex items-center justify-center gap-1.5 rounded-full text-[12px] whitespace-nowrap transition-colors cursor-pointer ${
+                activeTab === 'templates' ? 'text-white font-semibold' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 font-medium'
               }`}
             >
-              <LayoutGrid className="w-3.5 h-3.5" />
+              <LayoutGrid className={`w-3.5 h-3.5 ${activeTab === 'templates' ? 'text-white' : ''}`} />
               <span>Templates</span>
             </button>
           </div>
@@ -259,7 +458,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
           <button
             type="button"
             onClick={toggleLeftSidebar}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            className="p-1.5 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
             title="Collapse Layers Panel"
           >
             <PanelLeftClose className="w-4 h-4" />
@@ -276,6 +475,9 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
         >
           {/* PAGE 1: LAYERS */}
           <div className="w-1/2 h-full flex flex-col overflow-hidden min-h-0">
+            {/* Pages — each page has its own design and layers */}
+            <PagesSection />
+            <div className="h-8 px-3 pt-1 flex items-center text-[12px] font-semibold text-slate-800 dark:text-slate-100 shrink-0">Layers</div>
             {/* Minimal Search Bar */}
           <div className="p-2 border-b border-slate-100 dark:border-slate-800">
             <div className="relative flex items-center">
@@ -306,113 +508,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                 <p className="text-xs font-medium text-slate-500">No layers</p>
               </div>
             ) : (
-              [...filteredElements].reverse().map((el, index) => {
-                const isSelected = selectedId === el.id || selectedIds.includes(el.id);
-                const isHidden = el.visible === false;
-                const isBeingDragged = draggedIdx === index;
-                const isDragOver = dragOverIdx === index && draggedIdx !== index;
-
-                return (
-                  <div
-                    key={el.id}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, index)}
-                    onDragOver={(e) => handleDragOver(e, index)}
-                    onDrop={(e) => handleDrop(e, index)}
-                    onDragEnd={handleDragEnd}
-                    onClick={(e) => {
-                      if (e.shiftKey) {
-                        if (selectedIds.includes(el.id)) {
-                          setSelectedIds(selectedIds.filter((id) => id !== el.id));
-                        } else {
-                          setSelectedIds([...selectedIds, el.id]);
-                        }
-                      } else if (el.groupId) {
-                        const groupMembers = elements.filter((x) => x.groupId === el.groupId);
-                        setSelectedIds(groupMembers.map((x) => x.id));
-                        setSelectedId(null);
-                      } else {
-                        setSelectedId(el.id);
-                        setSelectedIds([el.id]);
-                      }
-                    }}
-                    className={`group relative flex items-center justify-between px-2 py-1.5 rounded-lg cursor-grab active:cursor-grabbing transition-all text-xs border ${
-                      isDragOver
-                        ? 'border-t-2 border-t-[#0d99ff] bg-[#f0f7ff] dark:bg-blue-950/40'
-                        : isBeingDragged
-                        ? 'opacity-35 bg-slate-100 dark:bg-slate-800 border-dashed border-slate-300 dark:border-slate-700'
-                        : isSelected
-                        ? 'bg-[#0d99ff] text-white font-semibold shadow-xs border-[#0d99ff]'
-                        : isHidden
-                        ? 'bg-transparent text-slate-400 opacity-60 hover:bg-slate-100 dark:hover:bg-slate-800 border-transparent'
-                        : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border-transparent'
-                    }`}
-                  >
-                    {/* Left: Drag Grip Handle + Icon & Label */}
-                    <div className="flex items-center gap-1.5 min-w-0 flex-1 pr-1">
-                      <GripVertical
-                        className={`w-3 h-3 shrink-0 opacity-0 group-hover:opacity-60 transition-opacity ${
-                          isSelected ? 'text-white' : 'text-slate-400'
-                        }`}
-                      />
-
-                      <span
-                        className={`shrink-0 ${
-                          isSelected ? 'text-white' : 'text-slate-500'
-                        }`}
-                      >
-                        {getIcon(el)}
-                      </span>
-
-                      <span className="truncate text-xs font-medium leading-tight">
-                        {getLabel(el)}
-                      </span>
-                      {el.groupId && (
-                        <span className={`px-1 py-0.5 text-[9px] rounded font-semibold shrink-0 uppercase tracking-wider ${
-                          isSelected ? 'bg-white/25 text-white' : 'bg-blue-100 dark:bg-blue-950 text-[#0d99ff]'
-                        }`}>
-                          Group
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Right: Only 2 essential hover actions (Eye & Delete) */}
-                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                      {/* Visibility Toggle */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          updateElement(el.id, { visible: isHidden ? true : false });
-                        }}
-                        className={`p-1 rounded transition-colors ${
-                          isSelected
-                            ? 'text-white hover:bg-white/20'
-                            : 'text-slate-400 hover:text-slate-700 hover:bg-slate-200'
-                        }`}
-                        title={isHidden ? 'Show Layer' : 'Hide Layer'}
-                      >
-                        {isHidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      </button>
-
-                      {/* Delete */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteElement(el.id);
-                        }}
-                        className={`p-1 rounded transition-colors ${
-                          isSelected
-                            ? 'text-white hover:bg-red-600'
-                            : 'text-slate-400 hover:text-red-600 hover:bg-slate-200'
-                        }`}
-                        title="Delete Layer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
+              layerItems.map((item) => (item.kind === 'group' ? renderGroup(item.gid, item.members) : renderLayerRow(item.el, false)))
             )}
           </div>
         </div>
@@ -427,6 +523,10 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
         </div>
       </div>
     </div>
+        {/* Profile — pinned to the bottom of the panel */}
+        <div className="shrink-0 border-t border-slate-100 dark:border-slate-800 px-2 py-1.5 bg-white dark:bg-slate-900">
+          <AccountMenu variant="sidebar" />
+        </div>
       </div>
     </aside>
   );
@@ -617,22 +717,41 @@ const TemplatePicker: React.FC<{
     return map;
   }, [ranked]);
 
-  const q = query.trim().toLowerCase();
-  const list = (ranked as any[]).filter(
-    (t) =>
-      (shapeFilter === 'ALL' || t.shape === shapeFilter) &&
-      (!q || t.title.toLowerCase().includes(q) || t.tags?.some((tag: string) => tag.toLowerCase().includes(q)))
-  );
+  // A shape chosen → EVERY template is offered in that shape: the ones already in it first, then the
+  // others converted (borders, inner rings and curved text follow the new shape). "All" = originals.
+  const shaped = useMemo(() => {
+    if (shapeFilter === 'ALL') return null;
+    const byId = new Map<string, any>();
+    const html: Record<string, { __html: string }> = {};
+    for (const t of ranked as any[]) {
+      const s = t.shape === shapeFilter ? t : designInShape(t, shapeFilter, STAMP_MOUNT_PRESETS);
+      byId.set(t.id, s);
+      html[t.id] =
+        s === t
+          ? previews[t.id]
+          : {
+              __html: generateStampSvg({ widthMm: s.widthMm, heightMm: s.heightMm, inkColor: s.defaultData.inkColor || '#1e3a8a', elements: s.defaultData.elements, shape: s.shape })
+                .replace(/width="[^"]*mm"/, 'width="100%"')
+                .replace(/height="[^"]*mm"/, 'height="100%"'),
+            };
+    }
+    return { byId, html };
+  }, [shapeFilter, ranked, previews]);
+  const inShape = (t: any) => (shaped && shaped.byId.get(t.id)) || t;
+  const previewOf = (id: string) => (shaped && shaped.html[id]) || previews[id] || myPreviews[id];
 
-  // Favourites: built-in and own templates, newest favourite first, same search / shape filter
+  const q = query.trim().toLowerCase();
+  const matches = (t: any) => !q || t.title.toLowerCase().includes(q) || t.tags?.some((tag: string) => tag.toLowerCase().includes(q));
+  const list = (ranked as any[])
+    .filter(matches)
+    .sort((a, b) => (shapeFilter === 'ALL' ? 0 : Number(b.shape === shapeFilter) - Number(a.shape === shapeFilter)))
+    .map(inShape);
+
+  // Favourites: built-in and own templates, newest favourite first, same search; shown in the chosen shape
   const favourites = favouriteIds
     .map((id) => (ranked as any[]).find((t) => t.id === id) || allMine.find((t) => t.id === id))
-    .filter(
-      (t: any) =>
-        t &&
-        (shapeFilter === 'ALL' || t.shape === shapeFilter) &&
-        (!q || t.title.toLowerCase().includes(q) || t.tags?.some((tag: string) => tag.toLowerCase().includes(q)))
-    ) as any[];
+    .filter((t: any) => t && (matches(t) && (shapeFilter === 'ALL' || shaped?.byId.has(t.id) || t.shape === shapeFilter)))
+    .map(inShape) as any[];
 
   const renderCard = (t: any) => {
     const isApplying = applyingId === t.id;
@@ -652,7 +771,7 @@ const TemplatePicker: React.FC<{
           <div className="aspect-square bg-slate-50 dark:bg-slate-950/50 group-hover:bg-[#f0f7ff] dark:group-hover:bg-slate-800/70 flex items-center justify-center p-2.5 transition-colors relative">
             <div
               className="ink-preview w-full h-full flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-full transition-transform duration-300 group-hover:scale-105"
-              dangerouslySetInnerHTML={previews[t.id] || myPreviews[t.id]}
+              dangerouslySetInnerHTML={previewOf(t.id)}
             />
             {isApplying && (
               <div className="absolute inset-0 bg-[#0d99ff]/15 backdrop-blur-[1px] flex items-center justify-center">

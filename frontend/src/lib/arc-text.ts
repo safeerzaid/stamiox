@@ -531,6 +531,128 @@ function buildSerratedPath(
   }
 }
 
+// ── Pattern borders on any outline ──────────────────────────────────────────────────────────────
+// A decorative border (leaf wreath, daisy, rope, checkered, beads, scallop, diamonds, teeth) is
+// designed around a circle. To put the SAME pattern on a square / rectangular / oval stamp, it is
+// built around a circle with the outline's length and then bent onto the outline point by point:
+// position along the circle → position along the outline, distance from the circle → distance
+// from the outline. Every motif keeps its look and size; only the path it follows changes.
+
+export type PatternFrameGeom =
+  | { kind: 'rect'; x: number; y: number; w: number; h: number; r: number }
+  | { kind: 'ellipse'; cx: number; cy: number; rx: number; ry: number };
+
+/** Evenly sampled outline (clockwise from the top middle): position + outward normal by length. */
+function sampleOutline(g: PatternFrameGeom) {
+  const pts: Array<[number, number]> = [];
+  if (g.kind === 'ellipse') {
+    const N = 1440;
+    for (let i = 0; i < N; i++) {
+      const t = -Math.PI / 2 + (i / N) * Math.PI * 2;
+      pts.push([g.cx + g.rx * Math.cos(t), g.cy + g.ry * Math.sin(t)]);
+    }
+  } else {
+    const { x, y, w, h } = g;
+    const r = Math.max(0, Math.min(g.r, w / 2, h / 2));
+    const line = (x0: number, y0: number, x1: number, y1: number) => {
+      const n = Math.max(2, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 0.1));
+      for (let i = 0; i < n; i++) pts.push([x0 + ((x1 - x0) * i) / n, y0 + ((y1 - y0) * i) / n]);
+    };
+    const corner = (ccx: number, ccy: number, a0: number) => {
+      if (r <= 0) return;
+      const n = Math.max(4, Math.ceil((r * Math.PI) / 2 / 0.1));
+      for (let i = 0; i < n; i++) {
+        const a = a0 + (Math.PI / 2) * (i / n);
+        pts.push([ccx + r * Math.cos(a), ccy + r * Math.sin(a)]);
+      }
+    };
+    line(x + w / 2, y, x + w - r, y);
+    corner(x + w - r, y + r, -Math.PI / 2);
+    line(x + w, y + r, x + w, y + h - r);
+    corner(x + w - r, y + h - r, 0);
+    line(x + w - r, y + h, x + r, y + h);
+    corner(x + r, y + h - r, Math.PI / 2);
+    line(x, y + h - r, x, y + r);
+    corner(x + r, y + r, Math.PI);
+    line(x + r, y, x + w / 2, y);
+  }
+  const cum = [0];
+  for (let i = 1; i <= pts.length; i++) {
+    const [ax, ay] = pts[i - 1], [bx, by] = pts[i % pts.length];
+    cum.push(cum[i - 1] + Math.hypot(bx - ax, by - ay));
+  }
+  const length = cum[cum.length - 1];
+  const at = (s: number) => {
+    s = ((s % length) + length) % length;
+    let lo = 0, hi = pts.length;
+    while (lo < hi - 1) { const mid = (lo + hi) >> 1; if (cum[mid] <= s) lo = mid; else hi = mid; }
+    const [ax, ay] = pts[lo], [bx, by] = pts[(lo + 1) % pts.length];
+    const seg = cum[lo + 1] - cum[lo] || 1e-6;
+    const k = (s - cum[lo]) / seg;
+    const tx = bx - ax, ty = by - ay, tl = Math.hypot(tx, ty) || 1;
+    // clockwise on screen (y down): the outward normal is the tangent turned left
+    return { x: ax + tx * k, y: ay + ty * k, nx: ty / tl, ny: -tx / tl };
+  };
+  return { length, at };
+}
+
+const patternFrameCache = new Map<string, string>();
+
+/**
+ * The path of a pattern border along a rectangle / ellipse. `band` = the pattern's width (mm),
+ * `motifSpacing` = distance between motifs (mm) taken from the original circular pattern.
+ */
+export function generatePatternFrame(g: PatternFrameGeom, band: number, motifSpacing: number, style: string | boolean, origTeeth = 48): string {
+  const key = JSON.stringify([g, band, motifSpacing, style, origTeeth]);
+  const hit = patternFrameCache.get(key);
+  if (hit !== undefined) return hit;
+  // corners: a gentle curve (≥ 1.6 × the pattern's width) so motifs turn smoothly instead of
+  // being squeezed and folded on the inside of the corner
+  // (filled patterns — leaf wreath, checks — need a gentler corner still)
+  const cornerK = /^(wreath|leaf)$/.test(String(style)) || style === true ? 4.5 : /^(checkered|square)$/.test(String(style)) ? 2.6 : 1.6;
+  const geom: PatternFrameGeom = g.kind === 'rect' ? { ...g, r: Math.min(Math.max(g.r, band * cornerK, 1.5), g.w / 2, g.h / 2) } : g;
+  const outline = sampleOutline(geom);
+  const L = outline.length;
+  const Rm = L / (2 * Math.PI);
+  // a multiple of 4 motifs: one sits exactly at the middle of every side, so the border is
+  // symmetric left / right and top / bottom (and alternating patterns stay even)
+  const teeth = Math.max(8, Math.round(L / Math.max(0.5, motifSpacing) / 4) * 4);
+  const circle = buildSerratedPath(0, 0, Rm + band / 2, Rm - band / 2, teeth, style);
+  // bend every point of the circular pattern onto the outline
+  const tokens = circle.match(/[MLQCZ]|-?\d*\.?\d+(?:e[-+]?\d+)?/gi) || [];
+  const out: string[] = [];
+  let pending: number | null = null;
+  for (const tk of tokens) {
+    if (/^[MLQCZ]$/i.test(tk)) { out.push(tk); pending = null; continue; }
+    const v = parseFloat(tk);
+    if (pending === null) { pending = v; continue; }
+    const px = pending, py = v;
+    pending = null;
+    const r = Math.hypot(px, py);
+    const theta = Math.atan2(py, px);
+    const u = (((theta + Math.PI / 2) / (2 * Math.PI)) % 1 + 1) % 1;
+    const p = outline.at(u * L);
+    const off = r - Rm;
+    out.push(`${(p.x + p.nx * off).toFixed(3)},${(p.y + p.ny * off).toFixed(3)}`);
+  }
+  const d = out.join(' ').replace(/ ,/g, ',');
+  if (patternFrameCache.size > 200) patternFrameCache.clear();
+  patternFrameCache.set(key, d);
+  return d;
+}
+
+/** The pattern of a frame that was converted from a pattern ring (or null). */
+export function framePattern(el: any): { style: string | boolean; band: number; spacing: number; teeth: number; fill: boolean } | null {
+  const p = el?.pattern;
+  if (!p || p.type !== 'serrated-ring') return null;
+  const style = p.wreathStyle || p.wreath || false;
+  const band = Math.max(0.6, (Number(p.outerRadius) || 0) - (Number(p.innerRadius) || 0));
+  const teeth = Number(p.teeth) || 48;
+  const Rmean = ((Number(p.outerRadius) || 10) + (Number(p.innerRadius) || 9)) / 2;
+  const fill = !!style && (style === true || style === 'wreath' || style === 'checkered' || style === 'diamond');
+  return { style, band, spacing: (2 * Math.PI * Rmean) / teeth, teeth, fill };
+}
+
 /**
  * Calculates the exact (x, y) coordinates of the apex (center) of the arc text along its circular guide line.
  */

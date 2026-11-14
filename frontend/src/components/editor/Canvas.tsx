@@ -16,10 +16,11 @@ import {
   QRCodeElement,
   ImageElement,
 } from '../../types/stamp';
-import { calculateArcGlyphs, generateSerratedPath, getArcApexPoint } from '../../lib/arc-text';
+import { calculateArcGlyphs, generateSerratedPath, getArcApexPoint, generatePatternFrame, framePattern } from '../../lib/arc-text';
 import { getNamedClipart, getQrPath, getStrokeDash } from '../../lib/svg-generator';
-import { readLogoFile, processLogo, fitLogo, DEFAULT_LOGO_THRESHOLD } from '../../lib/logo';
+import { readLogoFile, processLogo, processLogoAdvanced, stampReadyEdit, fitLogo, DEFAULT_LOGO_THRESHOLD } from '../../lib/logo';
 import { mmToPx, pxToMm, MM_TO_PX } from '../../lib/units';
+import { convertBorder, matchBordersToShape, borderKindFor, type BorderKind } from '../../lib/shape-morph';
 import { Tooltip } from '../common/Tooltip';
 import { ShapeSizeBadge } from '../common/ShapeSizeBadge';
 import {
@@ -492,11 +493,43 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
     setInitialElementData(JSON.parse(JSON.stringify(selectedElement)));
   };
 
+  /** Box (mm) around the current unlocked, visible selection — null when there is nothing to grab. */
+  const getSelectionBox = () => {
+    if (selectedIds.length === 0) return null;
+    const sel = elements.filter((x) => selectedIds.includes(x.id) && x.visible !== false);
+    if (!sel.length || sel.some((x) => x.locked)) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    sel.forEach((x) => {
+      const b = getElementBounds(x, widthMm, heightMm);
+      minX = Math.min(minX, b.minX); minY = Math.min(minY, b.minY);
+      maxX = Math.max(maxX, b.maxX); maxY = Math.max(maxY, b.maxY);
+    });
+    return { sel, minX, minY, maxX, maxY };
+  };
+
+  // Hand cursor: open hand over the selected element(s), closed hand while moving them
+  const selBox = getSelectionBox();
+  const hoverInSelection =
+    !!selBox && mousePosMm.x >= selBox.minX && mousePosMm.x <= selBox.maxX && mousePosMm.y >= selBox.minY && mousePosMm.y <= selBox.maxY;
+  const handCursorClass = isDragging ? 'fx-hand-grabbing' : hoverInSelection && !editingTextId ? 'fx-hand-grab' : '';
+
   const handleCanvasPointerDown = (e: React.PointerEvent) => {
     if (isSpacePressedRef.current || e.button === 1) return;
 
     setEditingTextId(null);
     const posMm = screenToCanvasMm(e.clientX, e.clientY, isDragging || isResizing || isSlidingArc);
+
+    // Figma-style: pressing anywhere inside the current selection's box (even on empty space,
+    // e.g. the middle of a ring) grabs the selection and moves it. Other elements inside the box
+    // still get their own clicks first, so they stay selectable.
+    if (!e.shiftKey) {
+      const box = getSelectionBox();
+      if (box && posMm.x >= box.minX && posMm.x <= box.maxX && posMm.y >= box.minY && posMm.y <= box.maxY) {
+        handlePointerDown(e, box.sel[0]);
+        return;
+      }
+    }
+
     canvasDraggedRef.current = false;
     canvasInitiatedRef.current = true;
     setIsMarqueeSelecting(true);
@@ -535,8 +568,7 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
         // Clicking any element in a group selects the whole group!
         const groupMembers = elements.filter((x) => x.groupId === el.groupId && x.visible !== false);
         currentSelection = groupMembers.map((x) => x.id);
-        setSelectedIds(currentSelection);
-        setSelectedId(null);
+        setSelectedIds(currentSelection); // (setSelectedId(null) here would clear this selection again)
       } else {
         currentSelection = [el.id];
         setSelectedIds([el.id]);
@@ -694,29 +726,9 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
       else if (Math.abs(newOffset + 90) < 2.5) newOffset = -90;
       else if (Math.abs(newOffset - 180) < 2.5 || Math.abs(newOffset + 180) < 2.5) newOffset = 180;
 
-      // Radial adjustment:
-      const currentDist = Math.hypot(posMm.x - slidingArcData.cx, posMm.y - slidingArcData.cy);
-      const deltaDist = currentDist - (slidingArcData.startDist ?? currentDist);
-      const maxR = Math.max(widthMm, heightMm) / 2 - 0.5;
-      const baseR = slidingArcData.initialRadius ?? 15;
-      const newRadius = Math.max(4, Math.min(maxR, Number((baseR + deltaDist).toFixed(1))));
-
-      if (shape === 'OVAL') {
-        const maxDim = Math.max(widthMm || 40, heightMm || 40);
-        const newRx = Number((newRadius * ((widthMm || 40) / maxDim)).toFixed(1));
-        const newRy = Number((newRadius * ((heightMm || 40) / maxDim)).toFixed(1));
-        liveUpdate(slidingArcData.id, {
-          angleOffset: Number(newOffset.toFixed(1)),
-          radius: newRadius,
-          rx: newRx,
-          ry: newRy,
-        } as any);
-      } else {
-        liveUpdate(slidingArcData.id, {
-          angleOffset: Number(newOffset.toFixed(1)),
-          radius: newRadius,
-        } as any);
-      }
+      // The knob only turns the text around its circle — the curve (radius) stays as it is.
+      // (Radius is changed from the Radius control in the panel.)
+      liveUpdate(slidingArcData.id, { angleOffset: Number(newOffset.toFixed(1)) } as any);
       return;
     }
 
@@ -1180,6 +1192,18 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
     setEditingTextId(id);
   };
 
+  // Borders inside the stamp that don't match its shape (e.g. square frames left in a round stamp)
+  const borderMismatch = useMemo(
+    () => matchBordersToShape(ctxElements as any[], shape, widthMm, heightMm).changed,
+    [ctxElements, shape, widthMm, heightMm]
+  );
+  const matchAllBorders = () => {
+    const res = matchBordersToShape(ctxElements as any[], shape, widthMm, heightMm);
+    if (!res.changed) return;
+    pushHistory();
+    setElements(res.elements as any);
+  };
+
   const handleAddRing = () => {
     // A round border on a square/rect stamp makes the stamp round (its frame becomes the ring)
     if (autoCanvasShape && (shape === 'SQUARE' || shape === 'RECTANGULAR')) {
@@ -1317,10 +1341,19 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
     }
     try {
       const src = await readLogoFile(file);
-      const threshold = kind === 'qr' ? 128 : DEFAULT_LOGO_THRESHOLD;
-      const { maskSrc, aspect } = await processLogo(src, threshold, false);
-      const box = fitLogo(aspect, widthMm, heightMm, kind === 'qr' ? 0.38 : 0.45);
-      const id = addElement({ type: 'image', src, maskSrc, threshold, invert: false, ...(kind === 'qr' ? { name: 'QR code', isQr: true } : {}), ...box } as any);
+      let added: Record<string, any>;
+      if (kind === 'qr') {
+        // QR codes stay crisp: plain cut-off, no simplifying (every module matters)
+        const { maskSrc, aspect } = await processLogo(src, 128, false);
+        added = { src, maskSrc, threshold: 128, invert: false, name: 'QR code', isQr: true, ...fitLogo(aspect, widthMm, heightMm, 0.38) };
+      } else {
+        // logos are made stamp-friendly straight away: one ink colour, best cut-off for this
+        // logo, small details removed, smooth edges, bolder lines if too thin to engrave
+        const edit = await stampReadyEdit(src).catch(() => ({ threshold: DEFAULT_LOGO_THRESHOLD }));
+        const { maskSrc, aspect } = await processLogoAdvanced(src, edit);
+        added = { src, maskSrc, ...edit, ...fitLogo(aspect, widthMm, heightMm, 0.45) };
+      }
+      const id = addElement({ type: 'image', ...added } as any);
       setSelectedId(id);
     } catch (err: any) {
       setLogoError(err?.message || 'Could not load that image.');
@@ -1442,7 +1475,7 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
   return (
     <main
       className={`relative flex-1 flex flex-col items-center justify-center p-8 overflow-hidden select-none bg-[#f8fafc] dark:bg-[#080b11] transition-colors ${
-        isPanning ? 'cursor-grabbing' : isSpacePressed ? 'cursor-grab' : ''
+        isPanning ? 'cursor-grabbing' : isSpacePressed ? 'cursor-grab' : handCursorClass
       }`}
       onPointerDown={handleCanvasPointerDown}
       onContextMenu={handleContextMenu}
@@ -1954,11 +1987,24 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
                       if (!glyphs.length) return null;
                       const dir = arc.isReversed ? -1 : 1;
                       const padT = ((arc.fontSize || 3) * 0.45) / Math.max(circleRx, circleRy);
-                      const t0 = glyphs[0].angleRad - dir * padT;
-                      const t1 = glyphs[glyphs.length - 1].angleRad + dir * padT;
+                      // Unwrap the letters' angles so long / turned text keeps one direction (no ±2π jumps),
+                      // then trace the band point by point — a single SVG arc picks a mirrored centre once
+                      // the text covers more than half the circle, and the band lands away from the text.
+                      const angs: number[] = [];
+                      glyphs.forEach((g, i) => {
+                        let t = g.angleRad;
+                        if (i > 0) {
+                          while (t - angs[i - 1] > Math.PI) t -= 2 * Math.PI;
+                          while (t - angs[i - 1] < -Math.PI) t += 2 * Math.PI;
+                        }
+                        angs.push(t);
+                      });
+                      const t0 = angs[0] - dir * padT;
+                      const t1 = angs[angs.length - 1] + dir * padT;
                       const p = (t: number) => `${(circleCx + circleRx * Math.cos(t)).toFixed(3)} ${(circleCy + circleRy * Math.sin(t)).toFixed(3)}`;
-                      const large = Math.abs(t1 - t0) > Math.PI ? 1 : 0;
-                      const d = `M ${p(t0)} A ${circleRx} ${circleRy} 0 ${large} ${arc.isReversed ? 0 : 1} ${p(t1)}`;
+                      const steps = Math.max(8, Math.ceil(Math.abs(t1 - t0) / 0.05));
+                      let d = `M ${p(t0)}`;
+                      for (let i = 1; i <= steps; i++) d += ` L ${p(t0 + ((t1 - t0) * i) / steps)}`;
                       return (
                         <g className="pointer-events-none select-none">
                           <path d={d} fill="none" stroke={SEL} strokeOpacity={0.16} strokeLinecap="round" strokeWidth={(arc.fontSize || 3) * 1.25} />
@@ -2146,11 +2192,12 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
                       y={mMinY}
                       width={mW}
                       height={mH}
-                      fill="#38bdf8"
-                      fillOpacity={0.06}
-                      stroke="#7dd3fc"
-                      strokeWidth={0.11}
-                      strokeDasharray="1.2, 1.0"
+                      fill="#0d99ff"
+                      fillOpacity={0.14}
+                      stroke="#0d99ff"
+                      strokeWidth={1.5}
+                      vectorEffect="non-scaling-stroke"
+                      shapeRendering="crispEdges"
                     />
                   </g>
                 );
@@ -2260,6 +2307,59 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
 
       {/* --- FLOATING DOCK & QUICK ACTIONS WRAPPER --- */}
       <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center gap-2.5 pointer-events-none select-none max-w-[calc(100%-2rem)]">
+          {/* 0b. Border tools — a selected ring / oval / box can be turned into another shape */}
+          {selectedElement && (selectedElement.type === 'ring' || selectedElement.type === 'oval' || selectedElement.type === 'rect') && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              className="pointer-events-auto flex items-center gap-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1 rounded-xl shadow-lg shadow-slate-900/5 text-xs text-slate-700 dark:text-slate-200 whitespace-nowrap fx-panel"
+            >
+              <span className="pl-1.5 pr-0.5 text-[11.5px] font-medium text-slate-500 dark:text-slate-400">Border shape</span>
+              <div role="radiogroup" aria-label="Border shape" className="h-8 flex items-center p-0.5 rounded-lg bg-slate-100 dark:bg-slate-800">
+                {([
+                  { to: 'ring', label: 'Circle', icon: <circle cx="8" cy="8" r="6" /> },
+                  { to: 'oval', label: 'Oval', icon: <ellipse cx="8" cy="8" rx="7" ry="4.6" /> },
+                  { to: 'rect', label: 'Box', icon: <rect x="2.2" y="2.2" width="11.6" height="11.6" rx="1.2" /> },
+                ] as const).map(({ to, label, icon }) => {
+                  const active = selectedElement.type === to;
+                  return (
+                    <button
+                      key={to}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      title={active ? `${label} (current)` : `Make this border a ${label.toLowerCase()}`}
+                      onClick={() => {
+                        if (active) return;
+                        const M = Math.max(widthMm, heightMm);
+                        const stretch = shape === 'OVAL' ? { sx: widthMm / M, sy: heightMm / M } : { sx: 1, sy: 1 };
+                        pushHistory();
+                        setElements((prev) => prev.map((el) => (el.id === selectedElement.id ? (convertBorder(el as any, to as BorderKind, stretch) as any) : el)));
+                      }}
+                      className={`h-7 px-2 rounded-md flex items-center gap-1 text-[12px] font-medium transition-colors cursor-pointer ${
+                        active ? 'bg-white dark:bg-slate-700 text-[#0d99ff] shadow-[0_1px_2px_rgba(15,23,42,0.08)]' : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      <svg viewBox="0 0 16 16" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                        {icon}
+                      </svg>
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              {borderMismatch > 0 && (
+                <button
+                  type="button"
+                  onClick={matchAllBorders}
+                  title={`Make all ${borderMismatch} inner borders match the ${shape.toLowerCase()} stamp`}
+                  className="h-8 px-2.5 rounded-lg text-[12px] font-semibold text-[#0d99ff] hover:bg-[#e5f2ff] dark:hover:bg-blue-950/50 transition-colors cursor-pointer"
+                >
+                  Match stamp
+                </button>
+              )}
+            </div>
+          )}
           {/* 0. Text tools — their own pill above the bar, so the bar below never resizes or jumps */}
           {selectedElement && (selectedElement.type === 'arc-text' || selectedElement.type === 'text') && (
             <div
@@ -2445,7 +2545,7 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
           {(() => {
             const ICON_BTN = 'relative w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-110 active:scale-90 shrink-0 cursor-pointer select-none overflow-hidden';
             const IDLE = 'text-slate-600 hover:bg-slate-100 hover:text-slate-900';
-            const ON = 'bg-[#e5f2ff] dark:bg-blue-950/60 text-[#0d99ff] shadow-xs ring-2 ring-[#0d99ff]/20';
+            const ON = 'bg-[#e5f2ff] dark:bg-blue-950/60 text-[#0d99ff]';
             return (
               <>
                 <Tooltip content="Center on canvas" side="top">
@@ -2460,7 +2560,55 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
                   </button>
                 </Tooltip>
 
-                <div className="h-5 w-px bg-slate-200 mx-0.5 shrink-0" />
+                <div className="h-5 w-px bg-slate-200 dark:bg-slate-700 mx-0.5 shrink-0" />
+
+                {/* Stamp shape: the whole design (borders, inner rings, curved text) changes with it */}
+                <div role="radiogroup" aria-label="Stamp shape" className="flex items-center gap-0.5">
+                  {([
+                    { s: 'ROUND', label: 'Round stamp', icon: <circle cx="8" cy="8" r="6" /> },
+                    { s: 'OVAL', label: 'Oval stamp', icon: <ellipse cx="8" cy="8" rx="7" ry="4.6" /> },
+                    { s: 'SQUARE', label: 'Square stamp', icon: <rect x="2.2" y="2.2" width="11.6" height="11.6" rx="1.2" /> },
+                    { s: 'RECTANGULAR', label: 'Rectangle stamp', icon: <rect x="1" y="4" width="14" height="8" rx="1.2" /> },
+                  ] as const).map(({ s, label, icon }) => {
+                    const active = shape === s;
+                    // the stamp is already this shape but borders inside are not → clicking it fixes them
+                    const fixInside = active && borderMismatch > 0;
+                    return (
+                      <Tooltip
+                        key={s}
+                        content={
+                          fixInside
+                            ? `Make the ${borderMismatch} inner border${borderMismatch > 1 ? 's' : ''} ${borderKindFor(s) === 'ring' ? 'round' : borderKindFor(s) === 'oval' ? 'oval' : 'square'} too`
+                            : active && (s === 'SQUARE' || s === 'RECTANGULAR')
+                            ? `${label} (current) — click to re-align the layout`
+                            : active
+                            ? `${label} (current)`
+                            : `Change to ${label.toLowerCase()}`
+                        }
+                        side="top"
+                      >
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          aria-label={label}
+                          onClick={() =>
+                            // the current shape: fixes leftover borders and (box stamps) re-aligns the layout
+                            triggerToolClick(`shape-${s}`, () => switchCanvasShape(s as any))
+                          }
+                          className={`${ICON_BTN} ${active ? ON : IDLE} ${activeClickedTool === `shape-${s}` ? 'animate-btn-slow-dip' : ''}`}
+                        >
+                          {fixInside && <span aria-hidden className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-500" />}
+                          <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
+                            {icon}
+                          </svg>
+                        </button>
+                      </Tooltip>
+                    );
+                  })}
+                </div>
+
+                <div className="h-5 w-px bg-slate-200 dark:bg-slate-700 mx-0.5 shrink-0" />
 
                 <Tooltip content={laserInvert ? 'Laser invert: on' : 'Laser invert'} side="top">
                   <button
@@ -2504,7 +2652,7 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
                       <button
                         onClick={() => selectedId && triggerToolClick('delete', () => deleteElement(selectedId))}
                         disabled={!selectedId}
-                        className={`${ICON_BTN} ${!selectedId ? 'opacity-40 cursor-not-allowed text-slate-300 dark:text-slate-600 pointer-events-none' : activeClickedTool === 'delete' ? 'bg-rose-100 text-rose-600 shadow-xs ring-2 ring-rose-400/30 animate-btn-slow-dip' : 'text-slate-600 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40 dark:hover:text-rose-400'}`}
+                        className={`${ICON_BTN} ${!selectedId ? 'opacity-40 cursor-not-allowed text-slate-300 dark:text-slate-600 pointer-events-none' : activeClickedTool === 'delete' ? 'bg-rose-100 text-rose-600 animate-btn-slow-dip' : 'text-slate-600 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40 dark:hover:text-rose-400'}`}
                       >
                         {activeClickedTool === 'delete' && (
                           <span className="absolute inset-0 rounded-lg pointer-events-none animate-tool-click-ripple" />
@@ -2533,9 +2681,9 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
           className="relative flex items-center gap-0.5 whitespace-nowrap"
         >
           {(() => {
-            const TOOL = 'fx-tool relative h-9 px-3 rounded-lg text-[12px] font-medium flex items-center gap-2 shrink-0 cursor-pointer select-none transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-[1.04] active:scale-[0.92] hover:shadow-xs overflow-hidden';
+            const TOOL = 'fx-tool relative h-9 px-3 rounded-lg text-[12px] font-medium flex items-center gap-2 shrink-0 cursor-pointer select-none transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-[1.04] active:scale-[0.92] overflow-hidden';
             const IDLE = 'text-slate-600 dark:text-slate-300 hover:bg-slate-100/90 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white';
-            const CLICKED = 'bg-[#e5f2ff] dark:bg-blue-950/80 text-[#0d99ff] ring-2 ring-[#0d99ff]/25 shadow-xs animate-btn-slow-dip';
+            const CLICKED = 'bg-[#e5f2ff] dark:bg-blue-950/80 text-[#0d99ff] animate-btn-slow-dip';
             const ArcIcon = ({ down }: { down?: boolean }) => (
               <svg viewBox="0 0 16 16" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
                 {down ? <path d="M2.5 6.5 Q8 14 13.5 6.5" /> : <path d="M2.5 9.5 Q8 2 13.5 9.5" />}
@@ -2559,7 +2707,7 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
                     onClick={() => triggerToolClick('select', () => setActiveDockTool('select'))}
                     className={`${TOOL} ${
                       activeDockTool === 'select' || activeClickedTool === 'select'
-                        ? 'bg-[#e5f2ff] dark:bg-blue-950/60 text-[#0d99ff] shadow-xs ring-2 ring-[#0d99ff]/20'
+                        ? 'bg-[#e5f2ff] dark:bg-blue-950/60 text-[#0d99ff]'
                         : IDLE
                     } ${activeClickedTool === 'select' ? 'animate-btn-slow-dip' : ''}`}
                   >
@@ -2647,7 +2795,7 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
                     aria-controls="more-tools-bar"
                     className={`relative h-9 w-9 rounded-lg flex items-center justify-center shrink-0 cursor-pointer select-none transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-[1.08] active:scale-[0.88] overflow-hidden ${
                       isMoreToolsOpen || activeClickedTool === 'more'
-                        ? 'bg-[#e5f2ff] dark:bg-blue-950/60 text-[#0d99ff] shadow-xs ring-2 ring-[#0d99ff]/20'
+                        ? 'bg-[#e5f2ff] dark:bg-blue-950/60 text-[#0d99ff]'
                         : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                     } ${activeClickedTool === 'more' ? 'animate-btn-slow-dip' : ''}`}
                   >
@@ -2680,15 +2828,17 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
                 { key: 'qr', label: 'QR code', tip: 'Upload your QR code image (PNG, JPG, SVG)', onClick: () => qrInputRef.current?.click(), icon: <QrCode className="w-4 h-4" /> },
                 { key: 'date', label: 'Date', tip: "Add today's date", onClick: handleAddDate, icon: <CalendarDays className="w-4 h-4" /> },
               ]).map((t, idx) => (
-                <Tooltip key={t.key} content={t.tip} side="top" className="w-full">
+                // plain title tip: this row is clipped, so a floating tooltip would only leak its shadow
+                <div key={t.key} className="w-full">
                   <button
+                    title={t.tip}
                     onClick={() => triggerToolClick(t.key, t.onClick)}
                     style={{
                       transitionDelay: isMoreToolsOpen ? `${idx * 60}ms` : '0ms',
                     }}
                     className={`fx-tool relative w-full h-9 px-3 rounded-lg text-[12px] font-medium flex items-center justify-center gap-2 cursor-pointer select-none transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] hover:scale-[1.03] active:scale-[0.92] overflow-hidden ${
                       activeClickedTool === t.key
-                        ? 'bg-[#e5f2ff] dark:bg-blue-950/60 text-[#0d99ff] shadow-xs ring-2 ring-[#0d99ff]/20 animate-btn-slow-dip'
+                        ? 'bg-[#e5f2ff] dark:bg-blue-950/60 text-[#0d99ff] animate-btn-slow-dip'
                         : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                     } transform ${
                       isMoreToolsOpen ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
@@ -2704,7 +2854,7 @@ export const Canvas: React.FC<CanvasProps> = ({ onOpenClipartModal }) => {
                       {t.label}
                     </span>
                   </button>
-                </Tooltip>
+                </div>
               ))}
             </div>
           </div>
@@ -3084,6 +3234,12 @@ const RenderCanvasElementImpl: React.FC<RenderElementProps> = ({
 
     case 'rect': {
       const rc = element as RectElement;
+      // a frame that carries a decorative pattern (from a pattern ring): the same pattern, along the box
+      const pat = framePattern(rc);
+      if (pat) {
+        const d = generatePatternFrame({ kind: 'rect', x: rc.x, y: rc.y, w: rc.width, h: rc.height, r: Math.max(rc.rx || 0, pat.band) }, pat.band, pat.spacing, pat.style, pat.teeth);
+        return <path id={rc.id} d={d} fill={pat.fill ? inkColor : 'none'} stroke={inkColor} strokeWidth={rc.strokeWidth} className="cursor-move" onPointerDown={onPointerDown} />;
+      }
       return (
         <rect
           id={rc.id}
@@ -3106,6 +3262,11 @@ const RenderCanvasElementImpl: React.FC<RenderElementProps> = ({
 
     case 'oval': {
       const ov = element as OvalElement;
+      const pat = framePattern(ov);
+      if (pat) {
+        const d = generatePatternFrame({ kind: 'ellipse', cx: ov.cx, cy: ov.cy, rx: ov.rx, ry: ov.ry }, pat.band, pat.spacing, pat.style, pat.teeth);
+        return <path id={ov.id} d={d} fill={pat.fill ? inkColor : 'none'} stroke={inkColor} strokeWidth={ov.strokeWidth} className="cursor-move" onPointerDown={onPointerDown} />;
+      }
       return (
         <ellipse
           id={ov.id}

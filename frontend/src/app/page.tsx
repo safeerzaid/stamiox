@@ -165,7 +165,7 @@ export default function LandingPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 lg:gap-10 max-w-6xl mx-auto">
             {/* Card 1 (Dark Matte Card - Variant 01 - 1:1 Aspect Ratio) */}
-            <div className="bg-gradient-to-b from-[#22242b] via-[#17181d] to-[#101115] text-white p-8 sm:p-10 rounded-[32px] sm:rounded-[38px] border border-white/10 shadow-2xl flex flex-col justify-between relative overflow-hidden group hover:border-white/20 transition-all duration-300 md:aspect-square">
+            <div className="bg-gradient-to-b from-[#22242b] via-[#17181d] to-[#101115] text-white p-8 sm:p-10 rounded-[32px] sm:rounded-[38px] border border-white/10 shadow-2xl flex flex-col justify-between relative overflow-hidden group hover:border-white/20 transition-all duration-300 md:aspect-square card-lift card-glow-dark">
               <div className="space-y-6 relative z-10">
                 {/* Header Row */}
                 <div className="flex items-center justify-between">
@@ -225,16 +225,17 @@ export default function LandingPage() {
 
                   <Link
                     href="/templates"
-                    className="bg-white text-slate-950 font-bold text-xs sm:text-sm px-6 py-3 rounded-xl hover:bg-slate-100 transition-all cursor-pointer shadow-lg hover:scale-105 active:scale-95"
+                    className="bg-white text-slate-950 font-bold text-xs sm:text-sm px-6 py-3 rounded-xl hover:bg-slate-100 transition-all cursor-pointer shadow-lg hover:scale-105 active:scale-95 inline-flex items-center gap-1.5"
                   >
                     Explore Templates
+                    <ArrowRight className="w-4 h-4 transition-transform duration-300 ease-out group-hover:translate-x-1" />
                   </Link>
                 </div>
               </div>
             </div>
 
             {/* Card 2 (Vibrant Royal Blue Card - Variant 02 - 1:1 Aspect Ratio) */}
-            <div className="bg-gradient-to-br from-[#2563eb] via-[#1d4ed8] to-[#1e40af] text-white p-8 sm:p-10 rounded-[32px] sm:rounded-[38px] border border-blue-400/30 shadow-2xl shadow-blue-600/30 flex flex-col justify-between relative overflow-hidden group hover:border-blue-300 transition-all duration-300 md:aspect-square">
+            <div className="bg-gradient-to-br from-[#2563eb] via-[#1d4ed8] to-[#1e40af] text-white p-8 sm:p-10 rounded-[32px] sm:rounded-[38px] border border-blue-400/30 shadow-2xl shadow-blue-600/30 flex flex-col justify-between relative overflow-hidden group hover:border-blue-300 transition-all duration-300 md:aspect-square card-lift card-glow-blue">
               <div className="space-y-6 relative z-10">
                 {/* Header Row */}
                 <div className="flex items-center justify-between">
@@ -294,9 +295,10 @@ export default function LandingPage() {
 
                   <Link
                     href="/editor"
-                    className="bg-white text-blue-900 font-bold text-xs sm:text-sm px-6 py-3 rounded-xl hover:bg-slate-100 transition-all cursor-pointer shadow-lg hover:scale-105 active:scale-95"
+                    className="bg-white text-blue-900 font-bold text-xs sm:text-sm px-6 py-3 rounded-xl hover:bg-slate-100 transition-all cursor-pointer shadow-lg hover:scale-105 active:scale-95 inline-flex items-center gap-1.5"
                   >
                     Launch Studio Canvas
+                    <ArrowRight className="w-4 h-4 transition-transform duration-300 ease-out group-hover:translate-x-1" />
                   </Link>
                 </div>
               </div>

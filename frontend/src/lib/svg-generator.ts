@@ -1,5 +1,5 @@
 import { StampElement, ArcTextElement, StraightTextElement, RingElement, SerratedRingElement, RectElement, OvalElement, LineElement, ClipartElement, ImageElement, QRCodeElement } from '../types/stamp';
-import { calculateArcGlyphs, generateSerratedPath } from './arc-text';
+import { calculateArcGlyphs, generateSerratedPath, generatePatternFrame, framePattern } from './arc-text';
 import QRCode from 'qrcode';
 
 
@@ -207,6 +207,11 @@ function renderElementSvg(
 
     case 'rect': {
       const r = el as RectElement;
+      const pat = framePattern(r);
+      if (pat) {
+        const d = generatePatternFrame({ kind: 'rect', x: r.x, y: r.y, w: r.width, h: r.height, r: Math.max(r.rx || 0, pat.band) }, pat.band, pat.spacing, pat.style, pat.teeth);
+        return `<path id="${r.id}" d="${d}" fill="${pat.fill ? inkColor : 'none'}" stroke="${inkColor}" stroke-width="${r.strokeWidth || 0.5}" />`;
+      }
       const dashAttr = dashAttrs(r.strokeType, r.strokeWidth || 0.6);
 
       return `
@@ -228,6 +233,11 @@ function renderElementSvg(
 
     case 'oval': {
       const o = el as OvalElement;
+      const opat = framePattern(o);
+      if (opat) {
+        const d = generatePatternFrame({ kind: 'ellipse', cx: o.cx, cy: o.cy, rx: o.rx, ry: o.ry }, opat.band, opat.spacing, opat.style, opat.teeth);
+        return `<path id="${o.id}" d="${d}" fill="${opat.fill ? inkColor : 'none'}" stroke="${inkColor}" stroke-width="${o.strokeWidth || 0.5}" />`;
+      }
       return `
         <ellipse 
           id="${o.id}" 

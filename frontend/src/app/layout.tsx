@@ -8,6 +8,7 @@ import { EditorProvider } from '../context/EditorContext';
 import { Header } from '../components/layout/Header';
 import { Footer } from '../components/layout/Footer';
 import { TrialBanner } from '../components/layout/TrialBanner';
+import { SiteAreaMarker } from '../components/common/SiteAreaMarker';
 import { SubscriptionModal } from '../components/layout/SubscriptionModal';
 import { HoverFx } from '../components/common/HoverFx';
 
@@ -46,6 +47,7 @@ export default function RootLayout({
             __html: `
               (function() {
                 try {
+                  document.documentElement.dataset.area = location.pathname === '/editor' ? 'studio' : 'site';
                   var saved = localStorage.getItem('stamiox_theme');
                   var isDark = saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches);
                   if (isDark) {
@@ -74,6 +76,7 @@ export default function RootLayout({
           <AuthProvider>
             <SubscriptionProvider>
               <EditorProvider>
+                <SiteAreaMarker />
                 <Header />
                 <main className="flex-1 flex flex-col">{children}</main>
                 <Footer />
